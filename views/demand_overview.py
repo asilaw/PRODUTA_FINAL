@@ -24,7 +24,7 @@ def render():
         "Bagian converter forecast + master SKU → ForecastInput DES sudah aktif."
     )
 
-    tab_forecast, tab_converter = st.tabs(["1 · Forecasting System", "2 · Forecast → ForecastInput DES"])
+    tab_forecast, tab_converter = st.tabs(["1 · Forecasting", "2 · Konversi ke DES"])
 
     with tab_forecast:
         # Check if Ubay's CSV outputs are available
@@ -69,7 +69,7 @@ def render():
                 st.error("Gagal membaca raw data.")
                 st.exception(e)
 
-        if st.button("Run Forecasting Pipeline"):
+        if st.button("Jalankan Forecast"):
             raw_df = get_state("forecast_raw")
             if raw_df is None or raw_df.empty:
                 st.error("Upload raw historical demand terlebih dahulu.")

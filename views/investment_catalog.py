@@ -69,17 +69,17 @@ def render():
 
     # ── Page ───────────────────────────────────────────────────────────────────────
     st.markdown('<p class="page-title">Konfigurasi Investasi</p>',unsafe_allow_html=True)
-    st.caption("Kelola katalog mesin, paket investasi, dan parameter finansial yang digunakan oleh seluruh menu DSS.")
+    st.caption("Konfigurasi komponen mesin dan parameter finansial untuk analisis kelayakan investasi.")
 
     cat = load_catalog()
     _changed = False
 
-    tab_mesin, tab_paket, tab_param = st.tabs(["🔧 Katalog Mesin", "📦 Paket Investasi", "📊 Parameter Finansial"])
+    tab_mesin, tab_paket, tab_param = st.tabs(["Katalog Mesin", "Paket Investasi", "Parameter Finansial"])
 
     # ─────────────────────────────────────────────────────────────────────────────
     with tab_mesin:
         st.markdown("### Daftar Mesin")
-        st.caption("Harga CAPEX dan tarif OPEX per mesin. Perubahan otomatis dipakai oleh menu Capacity Planning dan Production Allocation.")
+        st.caption("Daftar mesin beserta estimasi biaya. Dapat diperbarui sesuai harga aktual.")
 
         machines = cat["machines"]
         _to_delete = None
@@ -108,7 +108,7 @@ def render():
             st.rerun()
 
         st.markdown("---")
-        with st.expander("➕ Tambah Mesin Baru"):
+        with st.expander("Tambah Mesin"):
             nc1,nc2 = st.columns(2)
             with nc1:
                 new_key   = st.text_input("ID Mesin (unik, huruf kecil_)", key="new_mk")

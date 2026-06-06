@@ -72,22 +72,22 @@ def _plot_outputs(result_df):
 
 
 def render():
-    hero("Capacity Simulation", "DES capacity module dengan logic output lengkap: utilization, bottleneck, planned jobs, charts, dan export Excel.")
-    note("Modul ini mempertahankan logic capacity lama. Tambahan tolerance bersifat opsional: jika availability = 100% dan downtime = 0, perilakunya kembali seperti versi awal.")
+    hero("Capacity Simulation", "Simulasi kapasitas lini produksi berdasarkan data permintaan dan skenario operasi.")
+    note("Parameter availability dan downtime bersifat opsional. Nilai default (100% / 0 hari) menggunakan jadwal penuh tanpa gangguan.")
 
     st.markdown("<div class='section-title'>Input Data</div>", unsafe_allow_html=True)
     source = st.radio(
         "Sumber ForecastInput DES",
-        ["Gunakan hasil dari Demand Overview", "Upload/Pakai ForecastInput siap pakai"],
+        ["Dari Demand Overview", "Upload file"],
         horizontal=True,
     )
-    if source == "Gunakan hasil dari Demand Overview":
+    if source == "Dari Demand Overview":
         forecast_input = get_state("forecast_input_des")
         source_note = "session: Demand Overview"
     else:
         forecast_input, source_note = _load_capacity_input_upload_or_default()
 
-    pasted = st.text_area("Atau paste tabel ForecastInput DES di sini", height=80, placeholder="Opsional. Paste tabel CSV/TSV dari Excel.")
+    pasted = st.text_area("Tempel data", height=80, placeholder="Opsional. Paste tabel CSV/TSV dari Excel.")
     if pasted.strip():
         try:
             forecast_input = pd.read_csv(StringIO(pasted), sep=None, engine="python")
@@ -127,9 +127,9 @@ def render():
     with c1:
         batch_options = st.multiselect("Batch Mode", ["B35", "BLOSS"], default=["B35", "BLOSS"])
     with c2:
-        growth_mode = st.radio("Growth input", ["Checklist lama", "Range"], horizontal=False)
+        growth_mode = st.radio("Skenario Pertumbuhan", ["Checklist", "Range"], horizontal=False)
     with c3:
-        if growth_mode == "Checklist lama":
+        if growth_mode == "Checklist":
             growth_options = st.multiselect("Growth Demand (%)", [0, 5, 10], default=[0])
         else:
             gmin = st.number_input("Growth min (%)", value=0.0, step=1.0)
@@ -146,7 +146,7 @@ def render():
         holiday_dates = st.text_area("Tanggal libur manual opsional", placeholder="Contoh: 2026-01-01, 2026-03-20, 2026-12-25", height=80)
 
     total_possible = estimate_scenario_count(b_days, b_hours, g_days, g_hours, d_days, d_hours, batch_options, growth_options)
-    st.caption(f"Estimasi kombinasi: {total_possible:,}. App menjalankan maksimal {int(max_scenarios):,} skenario.")
+    st.caption(f"Estimasi skenario: {total_possible:,}. App menjalankan maksimal {int(max_scenarios):,} skenario.")
 
     run_col, clear_col = st.columns([1, 1])
     with run_col:

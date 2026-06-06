@@ -68,3 +68,34 @@ def set_(key, val):
         with open(CACHE_DIR/f"{key}.pkl","wb") as f:
             pickle.dump({"version":CACHE_VERSION,"data":val},f)
     except: pass
+
+
+def upload_widget(key: str, label: str, loader_fn, accepted: list = None, key_suffix: str = ""):
+    """
+    Reusable file uploader that caches bytes in session + disk.
+    Returns the loaded DataFrame (or whatever loader_fn returns).
+    """
+    import streamlit as st
+    import pandas as pd
+    cached = get(key)
+    cached_bytes = get(f"_{key}_bytes")
+    cached_name  = get(f"_{key}_name")
+
+    if isinstance(cached_bytes, (bytes, bytearray)) and len(cached_bytes) > 0:
+        st.caption(f"✓ File terakhir: **{cached_name}**")
+
+    accept = accepted or ["csv","tsv","xlsx","xls"]
+    f = st.file_uploader(label, type=accept, key=f"{key}_uploader{key_suffix}")
+    if f is not None:
+        raw = f.read()
+        import io
+        result = loader_fn(io.BytesIO(raw))
+        set_(key, result)
+        set_(f"_{key}_bytes", raw)
+        set_(f"_{key}_name",  f.name)
+        return result
+
+    # Return cached
+    if isinstance(cached, pd.DataFrame) and not cached.empty:
+        return cached
+    return pd.DataFrame()

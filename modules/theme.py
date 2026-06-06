@@ -1,5 +1,5 @@
 """
-Theme — modern navy blue, fresh, professional.
+Theme — light/white base, palette: #071952 #088395 #37B7C3 #EBF4F6 #FFFFFF
 """
 import streamlit as st
 from pathlib import Path
@@ -8,88 +8,121 @@ LOGO_PATH = Path("assets/lactalis_logo.png")
 
 CSS = """
 <style>
-/* ── Palette: modern navy blue ───────────────────────────────────────────── */
-:root {
-  --bg:       #0f1729;
-  --bg2:      #192342;
-  --bg3:      #1f2d55;
-  --border:   #2e4082;
-  --primary:  #4096FF;
-  --primary2: #1677ff;
-  --text:     #f0f4ff;
-  --muted:    #8b9ec7;
-  --success:  #52c41a;
-  --warning:  #faad14;
-  --danger:   #ff4d4f;
-  --grad:     linear-gradient(135deg, #1677ff22, #4096ff11);
-}
+/* ── Palette ─────────────────────────────────────────────────────────────────
+   #071952  deep navy     → primary text, headings, sidebar bg
+   #088395  teal          → primary action, buttons, accents
+   #37B7C3  light teal    → hover, highlights, borders
+   #EBF4F6  pale blue     → card backgrounds, sidebar content
+   #FFFFFF  white         → main page background
+──────────────────────────────────────────────────────────────────────────── */
 
-/* ── Global ───────────────────────────────────────────────────────────────── */
-.stApp { background: var(--bg); }
+/* ── Global reset ──────────────────────────────────────────────────────────── */
+.stApp { background: #FFFFFF !important; }
+section[data-testid="stMain"] { background: #FFFFFF; }
 
-/* ── Cards / boxes ─────────────────────────────────────────────────────────── */
+/* ── Typography ────────────────────────────────────────────────────────────── */
+body, .stMarkdown, p, label { color: #071952 !important; }
+h1, h2, h3, h4 { color: #071952 !important; font-weight: 800; }
+
+/* ── Page title ────────────────────────────────────────────────────────────── */
 .page-title {
-  font-size:1.6rem; font-weight:800; color:var(--text);
-  padding:10px 18px; border-left:5px solid var(--primary);
-  background:var(--grad); border-radius:0 8px 8px 0; margin-bottom:1.2rem;
+  font-size: 1.55rem; font-weight: 800; color: #071952;
+  padding: 10px 18px;
+  border-left: 5px solid #088395;
+  background: linear-gradient(90deg, #EBF4F6, #FFFFFF);
+  border-radius: 0 8px 8px 0;
+  margin-bottom: 1.2rem;
 }
+
+/* ── Section title ─────────────────────────────────────────────────────────── */
 .section-title {
-  font-size:.82rem; font-weight:700; color:var(--primary);
-  text-transform:uppercase; letter-spacing:.1em; margin:1.2rem 0 .45rem;
+  font-size: .78rem; font-weight: 700; color: #088395;
+  text-transform: uppercase; letter-spacing: .1em;
+  margin: 1.2rem 0 .45rem;
+  border-bottom: 1px solid #EBF4F6;
+  padding-bottom: 4px;
 }
+
+/* ── KPI box ───────────────────────────────────────────────────────────────── */
 .kpi-box {
-  background:var(--bg2); border:1px solid var(--border); border-radius:10px;
-  padding:16px 20px; border-top:3px solid var(--primary); margin-bottom:8px;
-  transition:.2s;
+  background: #EBF4F6;
+  border: 1px solid #37B7C3;
+  border-top: 3px solid #088395;
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 8px;
+  transition: .2s;
 }
-.kpi-box:hover { border-color:var(--primary); background:var(--bg3); }
-.kpi-label { font-size:.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
-.kpi-value { font-size:1.4rem; font-weight:800; color:var(--text); margin-top:4px; }
+.kpi-box:hover { background: #d6eef2; }
+.kpi-label { font-size: .68rem; color: #088395; text-transform: uppercase; letter-spacing: .09em; font-weight: 600; }
+.kpi-value { font-size: 1.4rem; font-weight: 800; color: #071952; margin-top: 4px; }
+
+/* ── DSS card ──────────────────────────────────────────────────────────────── */
 .dss-card {
-  background:var(--bg2); border:1px solid var(--border); border-radius:12px;
-  padding:1.3rem; margin-bottom:12px;
+  background: #EBF4F6;
+  border: 1px solid #37B7C3;
+  border-radius: 12px;
+  padding: 1.3rem;
+  margin-bottom: 12px;
 }
+
+/* ── Hero box ──────────────────────────────────────────────────────────────── */
 .hero {
-  background:var(--grad); border:1px solid var(--border); border-radius:14px;
-  padding:1.6rem 2rem; margin-bottom:1.4rem;
+  background: linear-gradient(135deg, #EBF4F6, #FFFFFF);
+  border: 1px solid #37B7C3;
+  border-left: 5px solid #088395;
+  border-radius: 12px;
+  padding: 1.5rem 2rem;
+  margin-bottom: 1.4rem;
 }
-.hero h2 { color:var(--primary); font-size:1.5rem; font-weight:800; margin:0 0 .3rem; }
-.hero p  { color:var(--muted); margin:0; font-size:.9rem; }
+.hero h2 { color: #071952 !important; font-size: 1.4rem; font-weight: 800; margin: 0 0 .3rem; }
+.hero p  { color: #088395 !important; margin: 0; font-size: .88rem; }
 
-/* ── Badges ─────────────────────────────────────────────────────────────────── */
-.badge-feasible   { background:#135200; color:#95de64; padding:4px 14px; border-radius:6px; font-weight:700; border:1px solid #52c41a; }
-.badge-infeasible { background:#5c0011; color:#ff7875; padding:4px 14px; border-radius:6px; font-weight:700; border:1px solid #ff4d4f; }
-.badge-maintain   { background:#135200; color:#95de64; padding:3px 10px; border-radius:4px; font-weight:600; font-size:.82rem; }
-.badge-modify     { background:#614700; color:#ffd666; padding:3px 10px; border-radius:4px; font-weight:600; font-size:.82rem; }
+/* ── Badges ────────────────────────────────────────────────────────────────── */
+.badge-feasible   { background: #d6f5e0; color: #0a5c2e; padding: 4px 14px; border-radius: 6px; font-weight: 700; border: 1px solid #52c41a; }
+.badge-infeasible { background: #fde8e8; color: #8b0000; padding: 4px 14px; border-radius: 6px; font-weight: 700; border: 1px solid #ff4d4f; }
+.badge-maintain   { background: #d6f5e0; color: #0a5c2e; padding: 3px 10px; border-radius: 4px; font-weight: 600; font-size: .82rem; }
+.badge-modify     { background: #fff3cd; color: #614700; padding: 3px 10px; border-radius: 4px; font-weight: 600; font-size: .82rem; }
 
-/* ── Sidebar: nav only, clean ───────────────────────────────────────────────── */
+/* ── Sidebar ───────────────────────────────────────────────────────────────── */
 [data-testid="stSidebar"] {
-  background: #111c38 !important;
-  border-right: 1px solid var(--border);
-}
-[data-testid="stSidebar"] .stRadio > label > div {
-  color: var(--muted); font-size:.82rem; font-weight:600; letter-spacing:.06em;
+  background: #071952 !important;
+  border-right: 1px solid #088395;
 }
 [data-testid="stSidebar"] .stRadio > div > label {
-  padding:8px 12px; border-radius:8px; cursor:pointer;
-  transition:.15s; display:block; margin:2px 0;
+  color: #EBF4F6 !important;
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: .15s;
+  display: block;
+  margin: 2px 0;
+  font-size: .88rem;
 }
 [data-testid="stSidebar"] .stRadio > div > label:hover {
-  background:var(--bg3); color:var(--primary);
+  background: #088395;
+  color: #FFFFFF !important;
 }
-[data-testid="stSidebar"] [data-checked="true"] > label {
-  background:var(--bg3); border-left:3px solid var(--primary); color:var(--text);
-}
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] span,
+[data-testid="stSidebar"] small,
+[data-testid="stSidebar"] div { color: #EBF4F6 !important; }
 
-/* ── Right panel ─────────────────────────────────────────────────────────────── */
-.right-panel {
-  background:var(--bg2); border:1px solid var(--border); border-radius:12px;
-  padding:1rem 1.1rem; height:100%;
+/* ── Streamlit widget tweaks ───────────────────────────────────────────────── */
+.stButton button[kind="primary"] {
+  background: #088395 !important;
+  border-color: #088395 !important;
+  color: white !important;
+  border-radius: 8px !important;
+  font-weight: 600 !important;
 }
-.right-panel .section-title { margin-top:.3rem; }
-
-/* ── Streamlit overrides ────────────────────────────────────────────────────── */
-div[data-testid="stDataFrame"] { border-radius:10px; overflow:hidden; }
+.stButton button[kind="primary"]:hover {
+  background: #37B7C3 !important;
+  border-color: #37B7C3 !important;
+}
+div[data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; border: 1px solid #EBF4F6; }
+.stTabs [data-baseweb="tab"] { color: #088395 !important; font-weight: 600; }
+.stTabs [aria-selected="true"] { border-bottom: 2px solid #088395 !important; }
 </style>
 """
 
@@ -102,10 +135,10 @@ def sidebar_brand():
             st.image(str(LOGO_PATH), use_container_width=True)
         st.markdown("""
         <div style="text-align:center;padding:6px 0 14px;">
-          <div style="font-size:.75rem;font-weight:700;color:#4096FF;letter-spacing:.1em;">
+          <div style="font-size:.72rem;font-weight:700;color:#37B7C3;letter-spacing:.12em;">
             DECISION SUPPORT SYSTEM
           </div>
-          <div style="font-size:.68rem;color:#8b9ec7;">PT FBMI · Lactalis · IPB</div>
+          <div style="font-size:.68rem;color:#EBF4F6;opacity:.7;">PT FBMI · Lactalis · IPB</div>
         </div>""", unsafe_allow_html=True)
 
 def hero(title, subtitle=""):
@@ -116,11 +149,13 @@ def hero(title, subtitle=""):
     </div>""", unsafe_allow_html=True)
 
 def note(text):
-    st.markdown(f'<div style="background:#192342;border-left:4px solid #4096FF;padding:10px 14px;border-radius:4px;color:#8b9ec7;font-size:.88rem;margin:.6rem 0;">ℹ {text}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="background:#EBF4F6;border-left:4px solid #088395;padding:10px 14px;'
+        f'border-radius:4px;color:#071952;font-size:.88rem;margin:.6rem 0;">ℹ {text}</div>',
+        unsafe_allow_html=True)
 
 def warning(text):
-    st.markdown(f'<div style="background:#2d2100;border-left:4px solid #faad14;padding:10px 14px;border-radius:4px;color:#ffd666;font-size:.88rem;margin:.6rem 0;">⚠ {text}</div>', unsafe_allow_html=True)
-
-def right_panel_start():
-    """Returns a context column for right settings panel."""
-    return st.container()
+    st.markdown(
+        f'<div style="background:#fff8e6;border-left:4px solid #faad14;padding:10px 14px;'
+        f'border-radius:4px;color:#614700;font-size:.88rem;margin:.6rem 0;">⚠ {text}</div>',
+        unsafe_allow_html=True)
