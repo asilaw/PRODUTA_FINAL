@@ -1,0 +1,170 @@
+{
+  "AAC20SAC": {
+    "changepoint_prior_scale": 0.21435353490816028,
+    "seasonality_prior_scale": 0.05476279489319842,
+    "holidays_prior_scale": 0.05838142253427772,
+    "seasonality_mode": "additive"
+  },
+  "AAC250": {
+    "changepoint_prior_scale": 0.009994976971958504,
+    "seasonality_prior_scale": 0.5655372454055873,
+    "holidays_prior_scale": 0.09649614902619245,
+    "seasonality_mode": "additive"
+  },
+  "AAC600": {
+    "changepoint_prior_scale": 0.03165097028881454,
+    "seasonality_prior_scale": 0.31669967616850375,
+    "holidays_prior_scale": 8.955329462833639,
+    "seasonality_mode": "additive"
+  },
+  "AAP250": {
+    "changepoint_prior_scale": 0.029012467610760626,
+    "seasonality_prior_scale": 0.010258094111015066,
+    "holidays_prior_scale": 0.014335958772387416,
+    "seasonality_mode": "additive"
+  },
+  "AAP600": {
+    "changepoint_prior_scale": 0.006098371950671858,
+    "seasonality_prior_scale": 1.808893292305552,
+    "holidays_prior_scale": 1.4075206673214853,
+    "seasonality_mode": "additive"
+  },
+  "AAV20SAC": {
+    "changepoint_prior_scale": 0.012349662411228793,
+    "seasonality_prior_scale": 0.010133685864986768,
+    "holidays_prior_scale": 0.026268383608953873,
+    "seasonality_mode": "additive"
+  },
+  "AAV250": {
+    "changepoint_prior_scale": 0.0016183829557509751,
+    "seasonality_prior_scale": 0.2670769644131203,
+    "holidays_prior_scale": 4.898417497798466,
+    "seasonality_mode": "additive"
+  },
+  "AAV600": {
+    "changepoint_prior_scale": 0.0015239450858414805,
+    "seasonality_prior_scale": 0.047824323269227496,
+    "holidays_prior_scale": 0.045027544026413534,
+    "seasonality_mode": "additive"
+  },
+  "ABC700": {
+    "changepoint_prior_scale": 0.017645182930544994,
+    "seasonality_prior_scale": 0.01581213916545072,
+    "holidays_prior_scale": 0.2973702155417029,
+    "seasonality_mode": "additive"
+  },
+  "ABV25SAC": {
+    "changepoint_prior_scale": 0.0033117595694766356,
+    "seasonality_prior_scale": 0.01751116475001671,
+    "holidays_prior_scale": 0.012986844180662342,
+    "seasonality_mode": "additive"
+  },
+  "ABV700": {
+    "changepoint_prior_scale": 0.022800519003205302,
+    "seasonality_prior_scale": 0.010360994273858155,
+    "holidays_prior_scale": 3.4334420432798596,
+    "seasonality_mode": "additive"
+  },
+  "AGC175": {
+    "changepoint_prior_scale": 0.014631493768089903,
+    "seasonality_prior_scale": 0.01205436954136835,
+    "holidays_prior_scale": 0.01578784227980481,
+    "seasonality_mode": "additive"
+  },
+  "AGC250": {
+    "changepoint_prior_scale": 0.3406790354382022,
+    "seasonality_prior_scale": 2.0460809924579046,
+    "holidays_prior_scale": 0.25664783717915196,
+    "seasonality_mode": "multiplicative"
+  },
+  "AGC25SAC": {
+    "changepoint_prior_scale": 0.0019215233865377832,
+    "seasonality_prior_scale": 0.010788456396780007,
+    "holidays_prior_scale": 0.01380192326100118,
+    "seasonality_mode": "additive"
+  },
+  "AGC600": {
+    "changepoint_prior_scale": 0.23690283681174223,
+    "seasonality_prior_scale": 0.4869558701730706,
+    "holidays_prior_scale": 0.10008698615666939,
+    "seasonality_mode": "additive"
+  },
+  "AGC850": {
+    "changepoint_prior_scale": 0.49970413342990777,
+    "seasonality_prior_scale": 0.04134372800206242,
+    "holidays_prior_scale": 0.3546656396083141,
+    "seasonality_mode": "additive"
+  },
+  "AGP250": {
+    "changepoint_prior_scale": 0.48165704638024487,
+    "seasonality_prior_scale": 0.024429845847178194,
+    "holidays_prior_scale": 1.6300371126001565,
+    "seasonality_mode": "multiplicative"
+  },
+  "AGP600": {
+    "changepoint_prior_scale": 0.0804181556693005,
+    "seasonality_prior_scale": 0.010698963119412427,
+    "holidays_prior_scale": 0.010177249801519671,
+    "seasonality_mode": "additive"
+  },
+  "AGP850": {
+    "changepoint_prior_scale": 0.3682705852200481,
+    "seasonality_prior_scale": 0.010540141543025279,
+    "holidays_prior_scale": 0.9738977183092246,
+    "seasonality_mode": "additive"
+  },
+  "AGV175": {
+    "changepoint_prior_scale": 0.030012513988648574,
+    "seasonality_prior_scale": 0.010080164631876245,
+    "holidays_prior_scale": 0.016952575300067874,
+    "seasonality_mode": "additive"
+  },
+  "AGV250": {
+    "changepoint_prior_scale": 0.001498455665501543,
+    "seasonality_prior_scale": 0.010815949406355633,
+    "holidays_prior_scale": 0.06305510462344162,
+    "seasonality_mode": "additive"
+  },
+  "AGV25SAC": {
+    "changepoint_prior_scale": 0.008271718069967435,
+    "seasonality_prior_scale": 1.1217014906409328,
+    "holidays_prior_scale": 0.173838022883303,
+    "seasonality_mode": "additive"
+  },
+  "AGV600": {
+    "changepoint_prior_scale": 0.4683437649643112,
+    "seasonality_prior_scale": 0.024946675768853295,
+    "holidays_prior_scale": 0.03798812191614564,
+    "seasonality_mode": "additive"
+  },
+  "AGV850": {
+    "changepoint_prior_scale": 0.3677801582430835,
+    "seasonality_prior_scale": 0.0144930802872899,
+    "holidays_prior_scale": 3.0578028000836404,
+    "seasonality_mode": "additive"
+  },
+  "ALC400": {
+    "changepoint_prior_scale": 0.014812793586434678,
+    "seasonality_prior_scale": 0.010880317239110412,
+    "holidays_prior_scale": 0.010454240391164079,
+    "seasonality_mode": "additive"
+  },
+  "AMC200": {
+    "changepoint_prior_scale": 0.016674975459864076,
+    "seasonality_prior_scale": 0.014893942945809945,
+    "holidays_prior_scale": 0.010689898068943611,
+    "seasonality_mode": "additive"
+  },
+  "AMC400": {
+    "changepoint_prior_scale": 0.39911254249331557,
+    "seasonality_prior_scale": 0.010143473571815718,
+    "holidays_prior_scale": 1.9209574885498815,
+    "seasonality_mode": "additive"
+  },
+  "BKM500": {
+    "changepoint_prior_scale": 0.004279581012375311,
+    "seasonality_prior_scale": 0.010189693872420014,
+    "holidays_prior_scale": 0.8248963050469827,
+    "seasonality_mode": "additive"
+  }
+}

@@ -1,0 +1,70 @@
+"""
+Unified session — bridge between Asil's get_state/set_state and student's get/set_
+"""
+import streamlit as st
+import pandas as pd
+import pickle
+from pathlib import Path
+
+CACHE_VERSION = "v20250606"
+CACHE_DIR     = Path("data/cache")
+
+DEFAULTS = {
+    "logged_in":         False,
+    "user_name":         "",
+    "forecast_raw":      pd.DataFrame(),
+    "forecast_output":   pd.DataFrame(),
+    "master_sku":        pd.DataFrame(),
+    "forecast_input_des":pd.DataFrame(),
+    "simulation_result": pd.DataFrame(),
+    "simulation":        pd.DataFrame(),   # student uses this key
+    "scenario_config":   pd.DataFrame(),
+    "planned_jobs":      pd.DataFrame(),
+    "input_data":        pd.DataFrame(),
+    "export_bytes":      None,
+    "_cap_bytes":        b"",
+    "_cap_name":         "",
+    "_vol_bytes":        b"",
+    "_vol_name":         "",
+    "ml4":               [],
+}
+
+def init_session():
+    for k, v in DEFAULTS.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+# Asil-compatible
+def get_state(key): init_session(); return st.session_state.get(key, DEFAULTS.get(key))
+def set_state(key, val): init_session(); st.session_state[key] = val
+def clear_capacity_results():
+    for k in ["simulation_result","scenario_config","planned_jobs","input_data","export_bytes","simulation"]:
+        st.session_state[k] = DEFAULTS.get(k, pd.DataFrame())
+
+# Student-compatible
+def get(key):
+    init_session()
+    v = st.session_state.get(key)
+    if v is not None:
+        if isinstance(v, pd.DataFrame) and not v.empty: return v
+        if isinstance(v, pd.DataFrame): pass  # fall through to disk
+        elif isinstance(v, (bytes, bytearray)) and len(v) > 0: return v
+        elif isinstance(v, list) and len(v) > 0: return v
+        elif v: return v
+    p = CACHE_DIR / f"{key}.pkl"
+    if p.exists():
+        try:
+            with open(p,"rb") as f: payload = pickle.load(f)
+            if isinstance(payload,dict) and payload.get("version")==CACHE_VERSION:
+                st.session_state[key] = payload["data"]; return payload["data"]
+        except: p.unlink(missing_ok=True)
+    return DEFAULTS.get(key, pd.DataFrame())
+
+def set_(key, val):
+    init_session()
+    st.session_state[key] = val
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        with open(CACHE_DIR/f"{key}.pkl","wb") as f:
+            pickle.dump({"version":CACHE_VERSION,"data":val},f)
+    except: pass
