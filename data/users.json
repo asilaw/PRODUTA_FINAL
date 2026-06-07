@@ -4,5 +4,15 @@
     "phone": "",
     "password": "2dfe8d4d0e6e017be8e5219ae840b587160a6be68ba045338b095c0979599ca4",
     "role": "admin"
+  },
+  "gibran": {
+    "name": "Gibran Rabani",
+    "password": "240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9",
+    "role": "user"
+  },
+  "nabbb": {
+    "name": "Nabila",
+    "password": "240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9",
+    "role": "user"
   }
 }

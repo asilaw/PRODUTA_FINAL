@@ -72,16 +72,16 @@ def _plot_outputs(result_df):
 
 
 def render():
-    hero("Capacity Simulation", "Simulasi kapasitas lini produksi berdasarkan data permintaan dan skenario operasi.")
-    note("Parameter availability dan downtime bersifat opsional. Nilai default (100% / 0 hari) menggunakan jadwal penuh tanpa gangguan.")
+    hero("Capacity Simulation", "Simulasi kapasitas lini produksi.")
+    note("Parameter availability dan downtime bersifat opsional. Nilai default: jadwal penuh tanpa gangguan.")
 
     st.markdown("<div class='section-title'>Input Data</div>", unsafe_allow_html=True)
     source = st.radio(
-        "Sumber ForecastInput DES",
-        ["Dari Demand Overview", "Upload file"],
+        "Sumber Data Input",
+        ["Dari Demand & Forecasting", "Upload file"],
         horizontal=True,
     )
-    if source == "Dari Demand Overview":
+    if source == "Dari Demand & Forecasting":
         forecast_input = get_state("forecast_input_des")
         source_note = "session: Demand Overview"
     else:
@@ -96,7 +96,7 @@ def render():
             st.error("Paste tabel belum bisa dibaca.")
 
     if forecast_input is None or forecast_input.empty:
-        warning("ForecastInput DES belum tersedia. Buat dari Demand Overview, upload file, atau masukkan file ke folder <code>data/capacity_input_here/</code>.")
+        warning("Data input belum tersedia. Buat dari Demand Overview atau upload file.")
     else:
         st.caption(f"Input source: {source_note}")
         st.dataframe(forecast_input.head(120), use_container_width=True, hide_index=True)
@@ -127,7 +127,7 @@ def render():
     with c1:
         batch_options = st.multiselect("Batch Mode", ["B35", "BLOSS"], default=["B35", "BLOSS"])
     with c2:
-        growth_mode = st.radio("Skenario Pertumbuhan", ["Checklist", "Range"], horizontal=False)
+        growth_mode = st.radio("Pertumbuhan Demand", ["Checklist", "Range"], horizontal=False)
     with c3:
         if growth_mode == "Checklist":
             growth_options = st.multiselect("Growth Demand (%)", [0, 5, 10], default=[0])
@@ -146,7 +146,7 @@ def render():
         holiday_dates = st.text_area("Tanggal libur manual opsional", placeholder="Contoh: 2026-01-01, 2026-03-20, 2026-12-25", height=80)
 
     total_possible = estimate_scenario_count(b_days, b_hours, g_days, g_hours, d_days, d_hours, batch_options, growth_options)
-    st.caption(f"Estimasi skenario: {total_possible:,}. App menjalankan maksimal {int(max_scenarios):,} skenario.")
+    st.caption(f"Estimasi kombinasi: {total_possible:,}. App menjalankan maksimal {int(max_scenarios):,} skenario.")
 
     run_col, clear_col = st.columns([1, 1])
     with run_col:
@@ -198,7 +198,7 @@ def render():
         return
 
     _summary_cards(result_df, {"products_analyzed": len(input_df) if input_df is not None else 0, "holiday_days": holiday_cutoff})
-    data_tabs = st.tabs(["Simulation Result", "Scenario Configuration", "Production Plan", "Input Data", "Charts", "Export Result"])
+    data_tabs = st.tabs(["Simulation Result", "Scenario Configuration", "Production Plan", "Input", "Charts", "Export Result"])
     with data_tabs[0]:
         st.dataframe(result_df, use_container_width=True, hide_index=True)
     with data_tabs[1]:
