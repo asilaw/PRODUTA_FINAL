@@ -28,9 +28,9 @@ import hashlib, re as _re
 def _hash_pw(pw): return hashlib.sha256(pw.encode()).hexdigest()
 
 def _pw_valid(pw):
-    if len(pw) < 8:                        return False, "Minimal 8 karakter."
-    if not _re.search(r'[0-9]', pw):       return False, "Harus mengandung angka."
-    if not _re.search(r'[^a-zA-Z0-9]',pw): return False, "Harus mengandung simbol."
+    if len(pw) < 8:                         return False, "Minimal 8 karakter."
+    if not _re.search(r'[0-9]', pw):        return False, "Harus mengandung angka."
+    if not _re.search(r'[^a-zA-Z0-9]', pw): return False, "Harus mengandung simbol."
     return True, ""
 
 def _auto_login():
@@ -54,79 +54,125 @@ def _auto_login():
 def auth_page():
     _stc.html("<script>document.title='Decision Support System — Masuk'</script>", height=0)
 
-    # Inject login-specific CSS override
     st.markdown("""
     <style>
-    /* Hide streamlit header & footer on login */
-    [data-testid="stHeader"] { display: none !important; }
-    [data-testid="stSidebar"] { display: none !important; }
+    /* Hide streamlit chrome on login */
+    [data-testid="stHeader"],
+    [data-testid="stSidebar"],
+    [data-testid="stToolbar"],
     footer { display: none !important; }
-    section.main > div { padding: 0 !important; }
-    [data-testid="stAppViewContainer"] { padding: 0 !important; }
 
-    /* Login split layout */
-    .login-wrap {
-        display: flex; min-height: 100vh; width: 100%;
+    /* Remove ALL padding/margin from root */
+    html, body { margin: 0 !important; padding: 0 !important; height: 100%; }
+    [data-testid="stAppViewContainer"] {
+        padding: 0 !important; margin: 0 !important;
+        min-height: 100vh;
     }
-    .login-left {
-        flex: 1; background: linear-gradient(135deg, #071952 0%, #088395 60%, #37B7C3 100%);
-        display: flex; flex-direction: column; justify-content: center;
-        padding: 60px 56px; position: relative; overflow: hidden;
+    section.main > div {
+        padding: 0 !important; margin: 0 !important;
     }
-    .login-left::before {
+    section.main {
+        padding: 0 !important;
+    }
+    /* Remove column gap */
+    [data-testid="column"] { padding: 0 !important; }
+
+    /* Left panel — full height */
+    .lp-left {
+        min-height: 100vh;
+        background: linear-gradient(150deg, #071952 0%, #088395 65%, #37B7C3 100%);
+        padding: 56px 52px;
+        position: relative;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }
+    .lp-left::before {
         content: '';
-        position: absolute; top: -120px; right: -120px;
-        width: 420px; height: 420px; border-radius: 50%;
-        border: 80px solid rgba(255,255,255,0.06);
+        position: absolute; top: -100px; right: -100px;
+        width: 380px; height: 380px; border-radius: 50%;
+        border: 70px solid rgba(255,255,255,0.06);
+        pointer-events: none;
     }
-    .login-left::after {
+    .lp-left::after {
         content: '';
         position: absolute; bottom: -80px; left: -60px;
-        width: 300px; height: 300px; border-radius: 50%;
-        border: 60px solid rgba(255,255,255,0.04);
+        width: 280px; height: 280px; border-radius: 50%;
+        border: 55px solid rgba(255,255,255,0.04);
+        pointer-events: none;
     }
-    .login-left h1 {
-        color: #ffffff !important; font-size: 2.8rem; font-weight: 900;
-        line-height: 1.18; margin: 24px 0 18px; position: relative; z-index: 1;
+    .lp-left img { width: 240px; margin-bottom: 36px; position: relative; z-index: 1; }
+    .lp-left h1 {
+        color: #FFFFFF !important;
+        font-size: 2.45rem; font-weight: 900;
+        line-height: 1.22; margin: 0 0 18px;
+        position: relative; z-index: 1;
+        text-transform: uppercase;
+        text-align: justify;
+        text-align-last: left;
+        letter-spacing: 0.01em;
     }
-    .login-left p {
-        color: rgba(255,255,255,0.75); font-size: 1.05rem;
-        line-height: 1.6; max-width: 360px; position: relative; z-index: 1;
+    .lp-left p {
+        color: rgba(255,255,255,0.80);
+        font-size: .98rem; line-height: 1.6;
+        max-width: 340px;
+        position: relative; z-index: 1;
+        margin: 0 0 auto;
+        text-align: justify;
+        text-justify: inter-word;
     }
-    .login-left .brand-tag {
-        color: rgba(255,255,255,0.5); font-size: .8rem;
-        position: absolute; bottom: 32px; left: 56px; z-index: 1;
+    .lp-brand {
+        color: rgba(255,255,255,0.42);
+        font-size: .75rem;
+        position: relative; z-index: 1;
+        margin-top: 48px;
     }
-    .login-right {
-        flex: 1; background: #ffffff;
-        display: flex; flex-direction: column; justify-content: center;
-        padding: 60px 64px;
+
+    /* Right panel — full height, white */
+    .lp-right {
+        min-height: 100vh;
+        background: #ffffff;
+        padding: 56px 64px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
     }
-    .login-right h2 {
-        font-size: 1.9rem; font-weight: 800; color: #071952 !important; margin: 0 0 6px;
+    .lp-right h2 {
+        font-size: 2.1rem; font-weight: 900;
+        color: #071952 !important; margin: 0 0 6px;
+        letter-spacing: .02em; text-transform: uppercase;
     }
-    .login-right .sub { color: #088395; font-size: .94rem; margin-bottom: 36px; }
+    .lp-right .sub {
+        color: #088395; font-size: .9rem; margin-bottom: 32px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-    # Split layout via columns
-    left, right = st.columns([1, 1])
+    left_col, right_col = st.columns([1, 1], gap="small")
 
-    with left:
-        logo_path = LOGO if Path(LOGO).exists() else None
+    # ── Left panel ──────────────────────────────────────────────────────
+    with left_col:
+        logo_b64 = ""
+        if Path(LOGO).exists():
+            import base64
+            logo_b64 = base64.b64encode(open(LOGO, "rb").read()).decode()
+
+        logo_tag = f'<img src="data:image/png;base64,{logo_b64}" />' if logo_b64 else ""
         st.markdown(f"""
-        <div class="login-left">
-            {'<img src="data:image/png;base64,' + __import__('base64').b64encode(open(logo_path,'rb').read()).decode() + '" style="width:160px;position:relative;z-index:1;" />' if logo_path else ''}
-            <h1>Sistem Pengambilan<br>Keputusan<br>Kapasitas Produksi</h1>
-            <p>Perencanaan kapasitas berbasis data — dari forecast permintaan hingga rekomendasi investasi mesin, dalam satu platform terintegrasi.</p>
-            <div class="brand-tag">PT FBMI &middot; Lactalis Group &middot; IPB University &middot; 2026</div>
+        <div class="lp-left">
+            {logo_tag}
+            <h1>SISTEM PENGAMBILAN KEPUTUSAN KAPASITAS PRODUKSI</h1>
+            <p>Platform terintegrasi pendukung keputusan kapasitas produksi PT FBMI.</p>
+            <div class="lp-brand">PT FBMI &middot; Lactalis Group &middot; IPB University &middot; 2026</div>
         </div>
         """, unsafe_allow_html=True)
 
-    with right:
+    # ── Right panel ─────────────────────────────────────────────────────
+    with right_col:
         st.markdown("""
-        <div class="login-right">
-            <h2>Selamat Datang</h2>
+        <div class="lp-right">
+            <h2>SELAMAT DATANG</h2>
             <div class="sub">Masuk untuk mengakses sistem atau daftar akun baru.</div>
         </div>
         """, unsafe_allow_html=True)
@@ -135,7 +181,8 @@ def auth_page():
 
         with login_tab:
             user = st.text_input("Username", key="l_user", placeholder="Masukkan username")
-            pwd  = st.text_input("Password", type="password", key="l_pwd", placeholder="Masukkan password")
+            pwd  = st.text_input("Password", type="password", key="l_pwd",
+                                  placeholder="Masukkan password")
             if st.button("Masuk", type="primary", use_container_width=True, key="btn_login"):
                 if not user.strip() or not pwd:
                     st.error("Isi username dan password.")
@@ -154,11 +201,14 @@ def auth_page():
 
         with reg_tab:
             st.caption("Password: min. 8 karakter, mengandung angka dan simbol.")
-            r_name = st.text_input("Nama Lengkap", key="r_name", placeholder="Nama lengkap Anda")
-            r_user = st.text_input("Username",     key="r_user", placeholder="Pilih username unik")
-            r_pwd  = st.text_input("Password",     type="password", key="r_pwd")
+            r_name = st.text_input("Nama Lengkap", key="r_name",
+                                    placeholder="Nama lengkap Anda")
+            r_user = st.text_input("Username", key="r_user",
+                                    placeholder="Pilih username unik")
+            r_pwd  = st.text_input("Password", type="password", key="r_pwd")
             r_pwd2 = st.text_input("Konfirmasi Password", type="password", key="r_pwd2")
-            if st.button("Daftar Akun", type="primary", use_container_width=True, key="btn_reg"):
+            if st.button("Daftar Akun", type="primary", use_container_width=True,
+                          key="btn_reg"):
                 if not r_name.strip():   st.error("Nama tidak boleh kosong.")
                 elif not r_user.strip(): st.error("Username tidak boleh kosong.")
                 elif r_pwd != r_pwd2:    st.error("Konfirmasi password tidak cocok.")
@@ -171,6 +221,7 @@ def auth_page():
                         if ok: st.success("Akun berhasil dibuat. Silakan masuk.")
                         else:  st.error(msg)
 
+
 # ── MAIN APP ────────────────────────────────────────────────────────────────
 if not _auto_login():
     auth_page()
@@ -182,7 +233,6 @@ _uname_d = get_state("user_name") or ""
 _first   = _uname_d.split()[0].title() if _uname_d else _uname
 _greeting = "Hi, Admin!" if _uname.lower() == "admin" else f"Hi, {_first}!"
 
-# Left sidebar: navigation only
 sidebar_brand()
 MENUS = ["Analisis Demand", "Capacity Simulation", "Capacity Planning",
          "Production Allocation", "Investment Catalog"]
@@ -196,10 +246,8 @@ with st.sidebar:
         unsafe_allow_html=True)
     page = st.radio("", MENUS, label_visibility="collapsed", key="main_nav")
 
-# Dynamic title
 _stc.html(f"<script>document.title='Decision Support System — {page}'</script>", height=0)
 
-# Top-right: Profile + Logout
 _, _tr = st.columns([7, 1])
 with _tr:
     _c1, _c2 = st.columns(2)
@@ -224,8 +272,7 @@ with _tr:
                                     help="Min 8 karakter, angka, dan simbol.")
             if st.button("Simpan password", key="btn_pw"):
                 v_ok, v_msg = _pw_valid(new_pw)
-                if not v_ok:
-                    st.error(v_msg)
+                if not v_ok: st.error(v_msg)
                 else:
                     lok, _ = verify_login(_uname, old_pw)
                     if not lok: st.error("Password lama salah.")
@@ -240,7 +287,6 @@ with _tr:
 
 st.markdown("---")
 
-# Route
 if page == "Analisis Demand":
     from views.demand_overview import render; render()
 elif page == "Capacity Simulation":

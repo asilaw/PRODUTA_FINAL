@@ -1,27 +1,30 @@
 """
 ANALISIS DEMAND & FORECASTING
-----------------------------------------------------------------------
-Tab 1 — FORECASTING   (domain Ubay)
-  · Upload raw historical → jalankan forecast (stub → Ubay isi)
-  · Visualisasi hasil forecast per SKU + summary + backtest
-  · Upload manual CSV forecast jika pipeline belum jalan
+==========================================================================
+Konteks pengerjaan Ubay (Model Peramalan Permintaan):
+  · 60 SKU lokal internal diklasifikasikan dengan metode Croston 2001
+    berdasarkan p (inter-demand interval) dan CV² (variasi permintaan):
+      SMOOTH       p < 1.32 & CV² < 0.49 → Prophet
+      ERRATIC      p < 1.32 & CV² ≥ 0.49 → Prophet
+      INTERMITTENT p ≥ 1.32 & CV² < 0.49 → CrostonSBA
+      LUMPY        p ≥ 1.32 & CV² ≥ 0.49 → CrostonSBA
+  · Prophet: Bayesian Optimization, feature engineering (event, lag, rolling,
+    holiday window ±31 hari Lebaran), train Aug'23–Oct'25 test Nov'25–Jan'26
+  · CrostonSBA: Croston + weighted ensemble, wmape sebagai metrik utama
+  · Output utama: unified_forecast_output.csv (12 kolom termasuk demand_pattern,
+    model_used, wmape_backtest, bias_pct, holiday_adjusted)
 
-Tab 2 — INPUT SIMULASI DES   (domain Asil)
-  · Pakai output Tab 1 ATAU upload CSV forecast manual
-  · Upload Master SKU (Asil) → auto-merge + generate ForecastInput DES
+Alur Tab 1 — FORECASTING:
+  1. Upload data historis (format FBMI Volume_F24-F26 atau long format)
+  2. Sistem parse & tampilkan ringkasan + klasifikasi pola
+  3. Jalankan forecast (pipeline Ubay — NotImplementedError = stub)
+  4. Tampilkan hasil: tabel + metrik akurasi per SKU
+  5. Export CSV → untuk tab VISUALISASI DEMAND
+  6. Visualisasi langsung
 
-Tab 3 — VISUALISASI DEMAND   (domain Gibran)
-  · Upload CSV forecast Ubay (prophet_forecast_output.csv)
-  · KPI cards: SKU Aktif (total>0), Volume/Bulan, Periode, Akurasi Model
-  · Charts: Volume per SKU & kemasan, donut proporsi, Top 10, Tren bulanan
-----------------------------------------------------------------------
-CATATAN MASTER DATA:
-  · Master SKU Gibran (master_sku.csv): SKU ↔ kemasan, lini, status produksi,
-    machine hours, OPEX, biaya maklon — digunakan di Tab 3 (enrichment warna)
-    dan di Capacity Planning / Production Allocation.
-  · Master Data Asil (Master_data.xlsx): SKU ↔ SpeedD, Speed, IsChocolate,
-    port_type, Allergen, ShelfLife — digunakan untuk generate ForecastInput DES
-    di Tab 2. Semua 62 SKU Asil ada di master Gibran → gunakan Asil untuk DES.
+Tab 2 — INPUT SIMULASI DES (Asil)
+Tab 3 — VISUALISASI DEMAND (Gibran)
+==========================================================================
 """
 
 import pandas as pd
@@ -29,41 +32,162 @@ import numpy as np
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
-import io
+from pathlib import Path
 
-from modules.theme import hero
 from modules.session import get_state, set_state
 from modules.io_utils import read_table
+from modules.raw_volume_parser import parse_raw_volume
 
-# ─── Konstanta & Palet ──────────────────────────────────────────────────────
-PKG_COLORS = {
-    "SSS":       "#071952",
-    "BIB":       "#37B7C3",
-    "STICKPACK": "#088395",
+# ─── Palet & Konstanta ──────────────────────────────────────────────────────
+PKG_COLORS = {"SSS": "#37B7C3", "BIB": "#071952", "STICKPACK": "#088395"}
+SEG_COLORS = {
+    "SMOOTH": "#088395", "ERRATIC": "#37B7C3",
+    "INTERMITTENT": "#e6a817", "LUMPY": "#c0392b",
 }
-CHART_BG   = "#FFFFFF"
+MODEL_COLORS = {"Prophet": "#088395", "CrostonSBA": "#071952", "Croston": "#37B7C3"}
+CHART_BG = "#FFFFFF"
 FONT_COLOR = "#071952"
 
-# ─── Utility functions ──────────────────────────────────────────────────────
-def _detect_pkg_from_master(sku: str, master_gibran: pd.DataFrame) -> str:
-    """Ambil jenis kemasan dari master SKU Gibran jika tersedia."""
-    if master_gibran is not None and not master_gibran.empty:
-        row = master_gibran[master_gibran["_sku"] == sku]
-        if not row.empty:
-            pt = str(row["PRODUCT TYPE"].iloc[0]).upper()
-            if "STICK" in pt: return "STICKPACK"
-            if "BIB" in pt:   return "BIB"
-            return "SSS"
-    return _detect_pkg_fallback(sku)
+MASTER_SKU_PATH  = Path("data/masters/master_sku.csv")
+MASTER_DATA_PATH = Path("data/masters/master_data.xlsx")
 
-def _detect_pkg_fallback(val: str) -> str:
-    """Fallback: deteksi dari deskripsi/SKU string."""
-    d = str(val).upper()
-    if "SAC" in d or "STICK" in d: return "STICKPACK"
-    if "BIB" in d:                  return "BIB"
-    return "SSS"
+# Kolom rename untuk tabel yang user-friendly
+FORECAST_COL_LABELS = {
+    "date": "Tanggal",
+    "sku": "Kode SKU",
+    "description": "Deskripsi Produk",
+    "forecast": "Forecast (ton)",
+    "forecast_lower": "Batas Bawah (ton)",
+    "forecast_upper": "Batas Atas (ton)",
+    "mape_backtest": "MAPE (%)",
+    "wmape_backtest": "WMAPE (%)",
+    "bias_pct": "Bias (%)",
+    "demand_pattern": "Pola Permintaan",
+    "model_used": "Model Digunakan",
+    "holiday_adjusted": "Koreksi Lebaran",
+    "_pkg": "Jenis Kemasan",
+    "ds": "Tanggal",
+    "y": "Volume (ton)",
+    "p": "Interval Rata-rata (p)",
+    "CV Squared": "CV² (Variasi)",
+    "model": "Model",
+    "segment": "Pola Permintaan",
+    "category": "Kategori Brand",
+}
 
-def _chart_layout(**kw):
+
+def _col_label(col: str) -> str:
+    return FORECAST_COL_LABELS.get(col, col.replace("_", " ").title())
+
+
+def _rename_cols(df: pd.DataFrame) -> pd.DataFrame:
+    return df.rename(columns={c: _col_label(c) for c in df.columns})
+
+
+# ─── Master loaders ──────────────────────────────────────────────────────────
+@st.cache_data(show_spinner=False)
+def _load_pkg_map() -> dict:
+    if not MASTER_SKU_PATH.exists():
+        return {}
+    try:
+        df = pd.read_csv(MASTER_SKU_PATH, encoding="latin-1", on_bad_lines="skip")
+        df.columns = [c.strip() for c in df.columns]
+        df = df.rename(columns={df.columns[0]: "sku"})
+        df["sku"] = df["sku"].astype(str).str.strip()
+        result = {}
+        for _, row in df.iterrows():
+            pt = str(row.get("PORT TYPE", "")).strip().upper()
+            if "STICK" in pt:   result[row["sku"]] = "STICKPACK"
+            elif "SSS" in pt:   result[row["sku"]] = "SSS"
+            else:               result[row["sku"]] = "BIB"
+        return result
+    except Exception:
+        return {}
+
+
+@st.cache_data(show_spinner=False)
+def _load_master_data_db() -> pd.DataFrame | None:
+    if not MASTER_DATA_PATH.exists():
+        return None
+    try:
+        return pd.read_excel(MASTER_DATA_PATH)
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner=False)
+def _load_sku_classification() -> pd.DataFrame | None:
+    p = Path("data/forecast/sku_classification.csv")
+    if not p.exists():
+        return None
+    try:
+        return pd.read_csv(p)
+    except Exception:
+        return None
+
+
+def _load_best_forecast_file() -> pd.DataFrame | None:
+    """
+    Load output forecast terbaik yang tersedia dari database Ubay.
+    Prioritas: unified_forecast_output (lebih lengkap) > prophet_forecast_output.
+    """
+    for fname in ["unified_forecast_output.csv", "prophet_forecast_output.csv"]:
+        p = Path(f"data/forecast/{fname}")
+        if p.exists():
+            try:
+                df = pd.read_csv(p)
+                if not df.empty:
+                    return df
+            except Exception:
+                pass
+    return None
+
+
+# ─── Utility ─────────────────────────────────────────────────────────────────
+def _clean_forecast(df: pd.DataFrame) -> pd.DataFrame:
+    col_map = {}
+    for c in df.columns:
+        cl = c.strip().lower()
+        if cl == "date":                         col_map[c] = "date"
+        elif cl in ("ds",):                      col_map[c] = "date"
+        elif cl == "forecast":                   col_map[c] = "forecast"
+        elif cl == "forecast_lower":             col_map[c] = "forecast_lower"
+        elif cl == "forecast_upper":             col_map[c] = "forecast_upper"
+        elif cl in ("sku", "skuid"):             col_map[c] = "sku"
+        elif cl in ("description","descriptionforecast",
+                    "item_name","itemname"):     col_map[c] = "description"
+        elif cl == "mape_backtest":              col_map[c] = "mape_backtest"
+        elif cl == "wmape_backtest":             col_map[c] = "wmape_backtest"
+        elif cl == "bias_pct":                   col_map[c] = "bias_pct"
+        elif cl == "demand_pattern":             col_map[c] = "demand_pattern"
+        elif cl == "model_used":                 col_map[c] = "model_used"
+        elif cl == "holiday_adjusted":           col_map[c] = "holiday_adjusted"
+        elif cl == "model":                      col_map[c] = "model"
+    df = df.rename(columns=col_map)
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    if "forecast" in df.columns:
+        df["forecast"] = pd.to_numeric(df["forecast"], errors="coerce").fillna(0).clip(lower=0)
+    return df
+
+
+def _filter_active(df: pd.DataFrame) -> pd.DataFrame:
+    if "sku" in df.columns and "forecast" in df.columns:
+        tot = df.groupby("sku")["forecast"].sum()
+        df  = df[df["sku"].isin(tot[tot > 0].index)].copy()
+    return df
+
+
+def _add_pkg(df: pd.DataFrame, pkg_map: dict) -> pd.DataFrame:
+    df = df.copy()
+    if "sku" in df.columns:
+        df["_pkg"] = df["sku"].apply(lambda x: pkg_map.get(str(x).strip(), "BIB"))
+    else:
+        df["_pkg"] = "BIB"
+    return df
+
+
+def _chart_kw(**kw) -> dict:
     base = dict(
         plot_bgcolor=CHART_BG, paper_bgcolor=CHART_BG, font_color=FONT_COLOR,
         margin=dict(l=10, r=10, t=36, b=10),
@@ -73,101 +197,119 @@ def _chart_layout(**kw):
     base.update(kw)
     return base
 
-def _load_master_gibran() -> pd.DataFrame | None:
-    """Load master_sku.csv Gibran dari session (jika sudah diupload)."""
-    df = get_state("master_sku_gibran")
-    if isinstance(df, pd.DataFrame) and not df.empty:
-        return df
-    return None
 
-def _clean_forecast(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize forecast DataFrame columns."""
-    col_map = {}
-    for c in df.columns:
-        cl = c.strip().lower()
-        if cl == "date": col_map[c] = "date"
-        elif cl == "forecast": col_map[c] = "forecast"
-        elif cl == "forecast_lower": col_map[c] = "forecast_lower"
-        elif cl == "forecast_upper": col_map[c] = "forecast_upper"
-        elif cl in ("sku", "skuid"): col_map[c] = "sku"
-        elif cl in ("description", "descriptionforecast", "item_name", "itemname"): col_map[c] = "description"
-        elif cl in ("mape_backtest", "mape", "mape_cv"): col_map[c] = "mape_backtest"
-    df = df.rename(columns=col_map)
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    if "forecast" in df.columns:
-        df["forecast"] = pd.to_numeric(df["forecast"], errors="coerce").fillna(0).clip(lower=0)
-    return df
+def _kpi(col, label, val):
+    col.markdown(
+        f'<div class="kpi-box"><div class="kpi-label">{label}</div>'
+        f'<div class="kpi-value">{val}</div></div>',
+        unsafe_allow_html=True,
+    )
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 # MAIN RENDER
-# ═══════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 def render():
-    # Judul: BOLD + UPPERCASE
     st.markdown(
         '<div class="page-title">ANALISIS DEMAND & FORECASTING</div>',
         unsafe_allow_html=True,
     )
     st.markdown(
         '<p style="color:#088395;font-size:.88rem;margin:-12px 0 18px 0;">'
-        'Forecasting permintaan, konversi ke input simulasi DES, dan visualisasi kapasitas.</p>',
+        "Forecasting permintaan, konversi ke input simulasi DES, dan visualisasi kapasitas.</p>",
         unsafe_allow_html=True,
     )
-
-    # Tab names UPPERCASE
     tab1, tab2, tab3 = st.tabs(["FORECASTING", "INPUT SIMULASI DES", "VISUALISASI DEMAND"])
-
-    # ══════════════════════════════════════════════════════════════════════
-    # TAB 1 — FORECASTING (domain Ubay)
-    # ══════════════════════════════════════════════════════════════════════
-    with tab1:
-        _tab_forecasting()
-
-    # ══════════════════════════════════════════════════════════════════════
-    # TAB 2 — INPUT SIMULASI DES (domain Asil)
-    # ══════════════════════════════════════════════════════════════════════
-    with tab2:
-        _tab_des_input()
-
-    # ══════════════════════════════════════════════════════════════════════
-    # TAB 3 — VISUALISASI DEMAND (domain Gibran)
-    # ══════════════════════════════════════════════════════════════════════
-    with tab3:
-        _tab_visualisasi()
+    with tab1: _tab_forecasting()
+    with tab2: _tab_des_input()
+    with tab3: _tab_visualisasi()
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# TAB 1: FORECASTING
-# ─────────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 1 — FORECASTING
+# ══════════════════════════════════════════════════════════════════════════════
 def _tab_forecasting():
-    # ── Section A: Upload Raw Historical ────────────────────────────────
-    st.markdown("<div class='section-title'>Data Historis</div>", unsafe_allow_html=True)
-    st.caption("Upload data historis permintaan untuk menjalankan pipeline forecast.")
+    pkg_map = _load_pkg_map()
+    sc_df   = _load_sku_classification()  # klasifikasi pola 60 SKU Ubay
+
+    # ── A: Upload Data Historis ──────────────────────────────────────────
+    st.markdown("<div class='section-title'>DATA HISTORIS</div>", unsafe_allow_html=True)
+    st.caption("Upload data historis volume permintaan bulanan.")
 
     raw_file = st.file_uploader(
-        "Upload Data Historis (CSV/Excel)", type=["csv","xlsx","xls","tsv"],
+        "Upload Data Historis", type=["csv","xlsx","xls","tsv"],
         key="raw_hist_upload", label_visibility="collapsed",
     )
     if raw_file:
         try:
-            raw_df = read_table(raw_file)
-            set_state("forecast_raw", raw_df)
-            st.success(f"Data historis dimuat: {len(raw_df):,} baris, {raw_df.shape[1]} kolom.")
-            with st.expander("Preview Data Historis"):
-                st.dataframe(raw_df.head(50), use_container_width=True, hide_index=True)
-        except Exception as e:
-            st.error(f"Gagal membaca: {e}")
+            # Coba format FBMI raw volume
+            try:
+                raw_df = parse_raw_volume(raw_file)
+            except Exception:
+                raw_df = read_table(raw_file)
 
-    # ── Section B: Parameter & Run Forecast ─────────────────────────────
+            set_state("forecast_raw", raw_df)
+
+            # Tampilkan ringkasan
+            cols = raw_df.columns.tolist()
+            has_ds  = "ds" in cols or "date" in cols
+            has_sku = "sku" in cols
+            has_y   = "y" in cols or "volume" in cols or "forecast" in cols
+
+            if has_ds and has_sku and has_y:
+                ds_col = "ds" if "ds" in cols else "date"
+                y_col  = "y"  if "y" in cols else ("volume" if "volume" in cols else "forecast")
+                raw_df[ds_col] = pd.to_datetime(raw_df[ds_col], errors="coerce")
+                n_sku   = raw_df["sku"].nunique()
+                n_month = raw_df[ds_col].dropna().nunique()
+                tot_vol = raw_df[y_col].sum()
+                d_min   = raw_df[ds_col].min().strftime("%b %Y")
+                d_max   = raw_df[ds_col].max().strftime("%b %Y")
+                st.success(
+                    f"Data historis dimuat: **{n_sku} SKU**, **{n_month} periode** "
+                    f"({d_min} – {d_max}), total volume: **{tot_vol:,.0f} ton**."
+                )
+
+                # Preview tabel dengan nama kolom user-friendly
+                prev = raw_df.head(60).copy()
+                prev[ds_col] = prev[ds_col].dt.strftime("%Y-%m")
+                with st.expander("Preview Data Historis"):
+                    st.dataframe(
+                        _rename_cols(prev), use_container_width=True, hide_index=True
+                    )
+
+                # Klasifikasi pola dari sku_classification jika ada
+                if sc_df is not None and has_sku:
+                    _show_sku_classification(sc_df, raw_df["sku"].unique())
+            else:
+                st.success(f"Data dimuat: {len(raw_df):,} baris.")
+                with st.expander("Preview"):
+                    st.dataframe(
+                        _rename_cols(raw_df.head(40)), use_container_width=True, hide_index=True
+                    )
+
+        except Exception as e:
+            st.error(f"Gagal membaca file: {e}")
+
     raw_df  = get_state("forecast_raw")
     has_raw = isinstance(raw_df, pd.DataFrame) and not raw_df.empty
 
-    st.markdown("<div class='section-title'>Parameter Forecast</div>", unsafe_allow_html=True)
+    if not has_raw:
+        st.markdown(
+            '<div class="note-box">Upload data historis untuk mengaktifkan pipeline forecast.</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── B: Parameter & Run ───────────────────────────────────────────────
+    st.markdown("<div class='section-title'>PARAMETER FORECAST</div>", unsafe_allow_html=True)
     fc1, fc2, fc3 = st.columns(3)
-    with fc1: method  = st.selectbox("Metode", ["Auto","Prophet","Croston","Moving Average"], key="fc_method")
-    with fc2: horizon = st.number_input("Horizon (bulan)", 3, 36, 12, 1, key="fc_horizon")
-    with fc3: st.markdown("<br>", unsafe_allow_html=True)
+    with fc1:
+        method  = st.selectbox("Metode", ["Auto (Prophet + CrostonSBA)","Prophet","CrostonSBA","Ensemble"], key="fc_method")
+    with fc2:
+        horizon = st.number_input("Horizon (bulan)", 3, 36, 12, 1, key="fc_horizon")
+    with fc3:
+        optimize = st.checkbox("Bayesian Optimization", value=True, key="fc_optimize",
+                               help="Optimasi parameter model secara otomatis (lebih lambat, lebih akurat).")
 
     if st.button("Jalankan Forecast", type="primary", disabled=not has_raw, key="btn_run_fc"):
         try:
@@ -176,107 +318,242 @@ def _tab_forecasting():
                 fc_result = run_forecast(raw_df, horizon_months=horizon, method=method)
             fc_result = _clean_forecast(fc_result)
             set_state("forecast_output", fc_result)
-            st.success(f"Forecast selesai: {len(fc_result):,} baris untuk {fc_result['sku'].nunique() if 'sku' in fc_result.columns else '?'} SKU.")
+            st.success(f"Forecast selesai: {len(fc_result):,} baris.")
         except NotImplementedError:
-            st.info("Pipeline forecast sedang dalam pengembangan. Upload hasil forecast di bawah.")
+            # Pipeline Ubay belum terintegrasi → load existing output sebagai simulasi
+            existing = _load_best_forecast_file()
+            if existing is not None:
+                existing = _clean_forecast(existing)
+                set_state("forecast_output", existing)
+                st.info(
+                    f"Pipeline sedang dalam pengembangan. "
+                    f"Menampilkan output forecast yang tersedia "
+                    f"({existing['sku'].nunique() if 'sku' in existing.columns else '?'} SKU)."
+                )
+            else:
+                st.info("Pipeline forecast sedang dalam pengembangan.")
         except Exception as e:
             st.error(f"Error: {e}")
 
-    if not has_raw:
-        st.markdown("<div class='note-box'>Upload data historis untuk mengaktifkan pipeline forecast.</div>", unsafe_allow_html=True)
-
-    # ── Section C: Upload manual jika pipeline belum ada ────────────────
-    st.markdown("<div class='section-title'>Atau Upload Hasil Forecast (CSV)</div>", unsafe_allow_html=True)
-    st.caption("Upload file prophet_forecast_output.csv atau format serupa.")
-
-    fc_manual = st.file_uploader(
-        "Upload CSV Forecast", type=["csv","xlsx"], key="fc_manual_upload",
-        label_visibility="collapsed",
-    )
-    if fc_manual:
-        try:
-            df_man = _clean_forecast(read_table(fc_manual))
-            set_state("forecast_output", df_man)
-            st.success(f"Forecast dimuat: {len(df_man):,} baris.")
-        except Exception as e:
-            st.error(f"Gagal membaca: {e}")
-
-    # ── Section D: Visualisasi hasil forecast (sama dgn Tab Visualisasi) ─
+    # ── C: Cek apakah ada forecast ───────────────────────────────────────
     fc_df  = get_state("forecast_output")
     has_fc = isinstance(fc_df, pd.DataFrame) and not fc_df.empty
 
+    # Auto-load existing forecast jika belum ada di session (tapi jangan tampilkan chart-nya)
     if not has_fc:
-        st.markdown("<div class='note-box'>Belum ada data forecast. Upload file atau jalankan pipeline.</div>", unsafe_allow_html=True)
+        st.markdown(
+            '<div class="note-box">Jalankan forecast atau upload data historis terlebih dahulu.</div>',
+            unsafe_allow_html=True,
+        )
         return
 
     fc_df = _clean_forecast(fc_df)
+    fc_df = _filter_active(fc_df)
 
-    # Filter SKU aktif
-    if "sku" in fc_df.columns and "forecast" in fc_df.columns:
-        sku_totals = fc_df.groupby("sku")["forecast"].sum()
-        active_skus = sku_totals[sku_totals > 0].index
-        fc_df = fc_df[fc_df["sku"].isin(active_skus)].copy()
+    # ── D: Ringkasan Hasil Forecast ──────────────────────────────────────
+    st.markdown("<div class='section-title'>HASIL FORECAST</div>", unsafe_allow_html=True)
 
-    # Tambah kolom _pkg
-    master_g = _load_master_gibran()
-    if "sku" in fc_df.columns:
-        fc_df["_pkg"] = fc_df["sku"].apply(lambda x: _detect_pkg_from_master(x, master_g))
-    elif "description" in fc_df.columns:
-        fc_df["_pkg"] = fc_df["description"].apply(_detect_pkg_fallback)
+    n_sku = fc_df["sku"].nunique() if "sku" in fc_df.columns else "-"
+    n_mon = fc_df["date"].dropna().nunique() if "date" in fc_df.columns else "-"
+
+    # Metrik akurasi
+    has_mape  = "mape_backtest"  in fc_df.columns
+    has_wmape = "wmape_backtest" in fc_df.columns
+    has_model = "model_used"     in fc_df.columns
+    has_patt  = "demand_pattern" in fc_df.columns
+
+    # Avg akurasi per SKU (bukan per baris)
+    avg_mape, avg_wmape = None, None
+    if has_sku and "sku" in fc_df.columns:
+        if has_mape:
+            avg_mape  = fc_df.groupby("sku")["mape_backtest"].first().dropna().mean()
+        if has_wmape:
+            avg_wmape = fc_df.groupby("sku")["wmape_backtest"].first().dropna().mean()
+
+    # KPI row
+    km1, km2, km3, km4 = st.columns(4)
+    _kpi(km1, "SKU AKTIF",      str(n_sku))
+    _kpi(km2, "HORIZON",        f"{n_mon} bulan")
+    _kpi(km3, "MAPE RATA-RATA", f"{avg_mape:.1f}%" if avg_mape is not None else
+         (f"{avg_wmape:.1f}%" if avg_wmape is not None else "N/A"))
+    if has_model:
+        n_prophet = (fc_df.drop_duplicates("sku")["model_used"] == "Prophet").sum() if has_sku else "?"
+        n_croston = (fc_df.drop_duplicates("sku")["model_used"] != "Prophet").sum() if has_sku else "?"
+        _kpi(km4, "MODEL", f"Prophet: {n_prophet} | Croston: {n_croston}")
     else:
-        fc_df["_pkg"] = "SSS"
+        _kpi(km4, "MODEL", "Prophet + CrostonSBA")
 
-    _render_forecast_charts(fc_df, context="tab1")
+    # Warning akurasi
+    if avg_mape and avg_mape > 30:
+        st.markdown(
+            '<div class="warn-box">Rata-rata MAPE tinggi — beberapa SKU perlu diverifikasi manual.</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── E: Ringkasan Pola Permintaan (dari sku_classification) ───────────
+    if sc_df is not None:
+        _show_sku_classification_summary(sc_df)
+
+    # ── F: Tabel Forecast ────────────────────────────────────────────────
+    st.markdown("<div class='section-title'>TABEL FORECAST PER SKU</div>", unsafe_allow_html=True)
+
+    # Filter SKU
+    if "sku" in fc_df.columns:
+        all_skus = sorted(fc_df["sku"].dropna().unique().tolist())
+        sel_skus = st.multiselect(
+            "Filter Kode SKU", all_skus, default=all_skus[:5], key="fc_tbl_filter"
+        )
+        tbl = fc_df[fc_df["sku"].isin(sel_skus)].copy() if sel_skus else fc_df.copy()
+    else:
+        tbl = fc_df.copy()
+
+    # Format kolom untuk tampilan
+    if "date" in tbl.columns:
+        tbl["date"] = tbl["date"].dt.strftime("%Y-%m-%d")
+    for col in ["forecast","forecast_lower","forecast_upper","mape_backtest","wmape_backtest","bias_pct"]:
+        if col in tbl.columns:
+            tbl[col] = pd.to_numeric(tbl[col], errors="coerce").round(4)
+
+    # Drop kolom internal
+    drop_cols = [c for c in ["_pkg"] if c in tbl.columns]
+    tbl = tbl.drop(columns=drop_cols, errors="ignore")
+
+    st.dataframe(_rename_cols(tbl), use_container_width=True, hide_index=True)
+
+    # ── G: Akurasi per SKU (card accordion) ─────────────────────────────
+    if (has_mape or has_wmape) and "sku" in fc_df.columns:
+        with st.expander("Akurasi Model per SKU"):
+            acc_df = fc_df.drop_duplicates("sku")[
+                ["sku"] +
+                (["description"] if "description" in fc_df.columns else []) +
+                (["demand_pattern"] if has_patt else []) +
+                (["model_used"] if has_model else []) +
+                (["mape_backtest"] if has_mape else []) +
+                (["wmape_backtest"] if has_wmape else []) +
+                (["bias_pct"] if "bias_pct" in fc_df.columns else [])
+            ].sort_values(
+                "wmape_backtest" if has_wmape else "mape_backtest",
+                na_position="last"
+            )
+            for col in ["mape_backtest","wmape_backtest","bias_pct"]:
+                if col in acc_df.columns:
+                    acc_df[col] = acc_df[col].round(2)
+            st.dataframe(_rename_cols(acc_df), use_container_width=True, hide_index=True)
+
+    # ── H: Export CSV ────────────────────────────────────────────────────
+    st.markdown("<div class='section-title'>EXPORT FORECAST</div>", unsafe_allow_html=True)
+    st.caption("Download file ini dan upload di tab VISUALISASI DEMAND untuk melihat chart kapasitas.")
+    exp = fc_df.copy()
+    if "date" in exp.columns:
+        exp["date"] = exp["date"].dt.strftime("%Y-%m-%d")
+    drop_exp = [c for c in ["_pkg"] if c in exp.columns]
+    exp = exp.drop(columns=drop_exp, errors="ignore")
+    st.download_button(
+        "Unduh Forecast CSV",
+        data=exp.to_csv(index=False).encode(),
+        file_name="forecast_output.csv",
+        mime="text/csv",
+        key="dl_fc_csv",
+    )
+
+    # ── I: Visualisasi langsung ──────────────────────────────────────────
+    st.markdown("<div class='section-title'>VISUALISASI DEMAND</div>", unsafe_allow_html=True)
+    viz = _add_pkg(fc_df, pkg_map)
+    _render_charts(viz, ctx="t1", sc_df=sc_df)
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# TAB 2: INPUT SIMULASI DES
-# ─────────────────────────────────────────────────────────────────────────
+# ─── Helper: tampilkan klasifikasi pola setelah upload historis ──────────────
+def _show_sku_classification(sc_df: pd.DataFrame, raw_skus):
+    """Tampilkan ringkasan pola permintaan untuk SKU yang ada di data historis."""
+    # Match SKU dari raw data ke klasifikasi
+    matched = sc_df[sc_df["sku"].isin(raw_skus)] if "sku" in sc_df.columns else sc_df
+    if matched.empty:
+        return
+
+    st.markdown("<div class='section-title'>KLASIFIKASI POLA PERMINTAAN</div>", unsafe_allow_html=True)
+    st.caption(
+        "Klasifikasi berdasarkan interval rata-rata permintaan (p) dan koefisien variasi kuadrat (CV²) "
+        "menggunakan metode Croston 2001."
+    )
+
+    seg_counts = matched["segment"].value_counts() if "segment" in matched.columns else pd.Series()
+    col_order = ["SMOOTH","ERRATIC","INTERMITTENT","LUMPY"]
+    cols = st.columns(4)
+    for i, seg in enumerate(col_order):
+        n = seg_counts.get(seg, 0)
+        model = "Prophet" if seg in ["SMOOTH","ERRATIC"] else "CrostonSBA"
+        cols[i].markdown(
+            f'<div class="kpi-box" style="border-left:4px solid {SEG_COLORS.get(seg,"#088395")};">'
+            f'<div class="kpi-label">{seg}</div>'
+            f'<div class="kpi-value">{n}</div>'
+            f'<div style="font-size:.7rem;color:#088395;margin-top:4px;">→ {model}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def _show_sku_classification_summary(sc_df: pd.DataFrame):
+    """Tampilkan ringkasan klasifikasi di bagian hasil forecast."""
+    if sc_df is None or sc_df.empty:
+        return
+    seg_counts = sc_df["segment"].value_counts() if "segment" in sc_df.columns else pd.Series()
+    if seg_counts.empty:
+        return
+
+    with st.expander("Distribusi Pola Permintaan (60 SKU Klasifikasi)", expanded=False):
+        col_order = ["SMOOTH","ERRATIC","INTERMITTENT","LUMPY"]
+        c1, c2, c3, c4 = st.columns(4)
+        for col_obj, seg in zip([c1,c2,c3,c4], col_order):
+            n = seg_counts.get(seg, 0)
+            model = "Prophet" if seg in ["SMOOTH","ERRATIC"] else "CrostonSBA"
+            col_obj.markdown(
+                f'<div class="kpi-box" style="border-left:4px solid {SEG_COLORS.get(seg,"#088395")};">'
+                f'<div class="kpi-label">{seg}</div>'
+                f'<div class="kpi-value">{n} SKU</div>'
+                f'<div style="font-size:.7rem;color:#088395;margin-top:4px;">→ {model}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        # Scatter plot p vs CV²
+        if all(c in sc_df.columns for c in ["p","CV Squared","segment","sku"]):
+            fig = px.scatter(
+                sc_df, x="p", y="CV Squared", color="segment",
+                color_discrete_map=SEG_COLORS, hover_data=["sku"],
+                height=300,
+                labels={"p": "p (interval rata-rata permintaan)",
+                        "CV Squared": "CV² (variasi permintaan)", "segment": "Pola"},
+            )
+            fig.add_hline(y=0.49, line_dash="dash", line_color="gray", opacity=0.6)
+            fig.add_vline(x=1.32, line_dash="dash", line_color="gray", opacity=0.6)
+            fig.update_layout(**_chart_kw(showlegend=True))
+            st.plotly_chart(fig, use_container_width=True, key="scatter_seg")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — INPUT SIMULASI DES
+# ══════════════════════════════════════════════════════════════════════════════
 def _tab_des_input():
-    st.markdown("<div class='section-title'>Output Forecast</div>", unsafe_allow_html=True)
-    st.caption("Gunakan hasil forecast dari tab FORECASTING, atau upload file forecast secara langsung.")
+    # ── Sumber Forecast ──────────────────────────────────────────────────
+    st.markdown("<div class='section-title'>OUTPUT FORECAST</div>", unsafe_allow_html=True)
 
     fc_df  = get_state("forecast_output")
     has_fc = isinstance(fc_df, pd.DataFrame) and not fc_df.empty
 
     if has_fc:
-        fc_df = _clean_forecast(fc_df)
-        # Filter aktif
-        if "sku" in fc_df.columns and "forecast" in fc_df.columns:
-            sku_totals = fc_df.groupby("sku")["forecast"].sum()
-            active = sku_totals[sku_totals > 0].index
-            fc_df  = fc_df[fc_df["sku"].isin(active)].copy()
+        fc_df = _clean_forecast(_filter_active(fc_df))
         n_sku = fc_df["sku"].nunique() if "sku" in fc_df.columns else "?"
-        st.success(f"Output forecast terdeteksi — {len(fc_df):,} baris, {n_sku} SKU aktif.")
-
-        sub_a, sub_b = st.tabs(["Forecast", "SKU Stats"])
-        with sub_a:
-            if "sku" in fc_df.columns:
-                all_skus = sorted(fc_df["sku"].dropna().unique().tolist())
-                sel_skus = st.multiselect("Filter SKU", all_skus, default=all_skus[:5], key="des_sku_filter")
-                show_df  = fc_df[fc_df["sku"].isin(sel_skus)] if sel_skus else fc_df
-            else:
-                show_df = fc_df
-            st.dataframe(show_df.head(300), use_container_width=True, hide_index=True)
-        with sub_b:
-            # Tampilkan sku_classification jika ada
-            try:
-                sc = pd.read_csv("data/forecast/sku_classification.csv")
-                st.dataframe(sc, use_container_width=True, hide_index=True)
-            except Exception:
-                st.info("File sku_classification.csv tidak ditemukan.")
+        st.success(f"Forecast tersedia dari tab FORECASTING — {n_sku} SKU aktif.")
     else:
-        st.markdown("<div class='note-box'>Belum ada output forecast. Upload di tab FORECASTING terlebih dahulu.</div>", unsafe_allow_html=True)
-        fc_upload = st.file_uploader(
-            "Atau upload file forecast di sini", type=["csv","xlsx"], key="fc_des_bridge",
+        st.caption("Belum ada data forecast. Upload di sini:")
+        fc_up = st.file_uploader(
+            "Upload File Forecast", type=["csv","xlsx"], key="fc_des_bridge",
             label_visibility="collapsed",
         )
-        if fc_upload:
+        if fc_up:
             try:
-                df_tmp = _clean_forecast(read_table(fc_upload))
+                df_tmp = _clean_forecast(_filter_active(read_table(fc_up)))
                 set_state("forecast_output", df_tmp)
-                has_fc = True
-                fc_df  = df_tmp
+                fc_df = df_tmp; has_fc = True
                 st.success(f"Forecast dimuat: {len(df_tmp):,} baris.")
                 st.rerun()
             except Exception as e:
@@ -285,364 +562,366 @@ def _tab_des_input():
     if not has_fc:
         return
 
-    # ── Master Data (Asil format — untuk DES) ───────────────────────────
-    st.markdown("<div class='section-title'>Master Data SKU (Untuk DES)</div>", unsafe_allow_html=True)
-    st.caption(
-        "Upload Master Data SKU yang berisi kecepatan mesin, port type, dan parameter simulasi. "
-        "Format: ItemName, SkuId, SkuGr, SpeedD, Speed, IsChocolate, port_type, Allergen, ShelfLife."
-    )
+    # ── Master Data Asil ─────────────────────────────────────────────────
+    st.markdown("<div class='section-title'>MASTER DATA SKU</div>", unsafe_allow_html=True)
 
-    master_asil_state = get_state("master_data_asil")
-    has_master_asil   = isinstance(master_asil_state, pd.DataFrame) and not master_asil_state.empty
+    ma_session = get_state("master_data_asil")
+    if isinstance(ma_session, pd.DataFrame) and not ma_session.empty:
+        master_asil = ma_session; src = "upload sebelumnya"
+    else:
+        master_asil = _load_master_data_db(); src = "database"
+        if master_asil is not None:
+            set_state("master_data_asil", master_asil)
 
-    master_asil_file = st.file_uploader(
-        "Upload Master Data (Excel/CSV)", type=["xlsx","xls","csv"],
-        key="master_asil_upload", label_visibility="collapsed",
-    )
-    if master_asil_file:
-        try:
-            ma = read_table(master_asil_file)
-            set_state("master_data_asil", ma)
-            has_master_asil   = True
-            master_asil_state = ma
-            st.success(f"Master Data dimuat: {len(ma)} SKU.")
-        except Exception as e:
-            st.error(f"Gagal membaca: {e}")
-
-    if has_master_asil:
-        with st.expander("Preview Master Data"):
-            st.dataframe(master_asil_state.head(20), use_container_width=True, hide_index=True)
-
-    # ── Parameter ────────────────────────────────────────────────────────
-    st.markdown("<div class='section-title'>Parameter</div>", unsafe_allow_html=True)
-    p1, p2 = st.columns(2)
-    with p1:
-        adj = st.slider(
-            "Adjustment forecast (%)", -30.0, 30.0, 0.0, 0.5,
-            help="Koreksi volume forecast sebelum masuk simulasi.",
-            key="des_adj",
+    if master_asil is not None:
+        st.markdown(
+            f'<div class="note-box">Master Data aktif: <b>{len(master_asil)}</b> SKU ({src}).</div>',
+            unsafe_allow_html=True,
         )
-    with p2:
-        qty_def = st.number_input("Qty default per SKU-bulan", 1, 100, 1, key="des_qty")
+        with st.expander("Ganti Master Data atau muat ulang dari database", expanded=False):
+            opt = st.radio("Sumber", ["Database","Upload Manual"], horizontal=True, key="des_master_opt")
+            if opt == "Upload Manual":
+                ma_file = st.file_uploader(
+                    "Upload Master Data", type=["xlsx","xls","csv"],
+                    key="master_asil_upload", label_visibility="collapsed",
+                )
+                if ma_file:
+                    try:
+                        ma_new = read_table(ma_file)
+                        set_state("master_data_asil", ma_new)
+                        master_asil = ma_new
+                        _load_master_data_db.clear()
+                        st.success(f"Master Data diperbarui: {len(ma_new)} SKU.")
+                    except Exception as e:
+                        st.error(f"Gagal: {e}")
+            else:
+                if st.button("Muat ulang dari database", key="des_reload"):
+                    _load_master_data_db.clear()
+                    db_ma = _load_master_data_db()
+                    if db_ma is not None:
+                        set_state("master_data_asil", db_ma)
+                        master_asil = db_ma
+                        st.success("Dimuat dari database.")
 
-    if not has_master_asil:
-        st.warning("Upload Master Data untuk mengaktifkan generator ForecastInput DES.")
+            # Preview kolom penting saja
+            show_cols = [c for c in ["SkuId","ItemName","port_type","Speed","SpeedD"] if c in master_asil.columns]
+            if show_cols:
+                st.dataframe(
+                    _rename_cols(master_asil[show_cols].head(12)),
+                    use_container_width=True, hide_index=True,
+                )
+    else:
+        st.warning("Master Data tidak tersedia. Upload di bawah.")
+        ma_file = st.file_uploader(
+            "Upload Master Data", type=["xlsx","xls","csv"],
+            key="master_asil_upload_req", label_visibility="collapsed",
+        )
+        if ma_file:
+            try:
+                master_asil = read_table(ma_file)
+                set_state("master_data_asil", master_asil)
+                st.success(f"Master Data dimuat: {len(master_asil)} SKU.")
+            except Exception as e:
+                st.error(f"Gagal: {e}")
+
+    if master_asil is None:
         return
 
-    # ── Generate button ──────────────────────────────────────────────────
-    if st.button("Generate ForecastInput DES", type="primary", key="btn_gen_des"):
+    # ── Parameter & Generate ─────────────────────────────────────────────
+    st.markdown("<div class='section-title'>PARAMETER</div>", unsafe_allow_html=True)
+    p1, p2 = st.columns(2)
+    with p1:
+        adj = st.slider("Penyesuaian Forecast (%)", -30.0, 30.0, 0.0, 0.5, key="des_adj",
+                        help="Faktor koreksi volume sebelum masuk simulasi.")
+    with p2:
+        qty_def = st.number_input("Qty minimum per SKU-bulan", 1, 100, 1, key="des_qty")
+
+    if st.button("Generate Input Simulasi DES", type="primary", key="btn_gen_des"):
         try:
             with st.spinner("Membuat input simulasi..."):
-                result = _build_des_input(fc_df, master_asil_state, adj, qty_def)
-            if result is not None and not result.empty:
-                set_state("forecast_input_des", result)
-                st.success(f"ForecastInput DES berhasil: {len(result):,} baris.")
-
-                m1, m2, m3, m4 = st.columns(4)
-                n_mon = result["MonthIndex"].nunique() if "MonthIndex" in result.columns else 1
-                m1.metric("Jumlah SKU", result["SkuId"].nunique() if "SkuId" in result.columns else "?")
-                m2.metric("Jumlah Bulan", n_mon)
-                ft_col = "ForecastTon" if "ForecastTon" in result.columns else None
-                if ft_col:
-                    m3.metric("Total Forecast", f"{result[ft_col].sum():,.1f} ton")
-                    m4.metric("Rata-rata/Bulan", f"{result[ft_col].sum()/n_mon:,.1f} ton")
-
-                st.markdown("<div class='section-title'>Preview</div>", unsafe_allow_html=True)
-                st.dataframe(result.head(50), use_container_width=True, hide_index=True)
-                st.download_button(
-                    "Unduh ForecastInput DES",
-                    data=result.to_csv(index=False).encode(),
-                    file_name="ForecastInput_DES.csv", mime="text/csv",
-                    key="dl_des",
-                )
-            else:
-                st.error("Hasil kosong. Periksa kolom SkuId di Master Data dan sku di forecast.")
+                result = _build_des_input(fc_df, master_asil, adj, qty_def)
+            set_state("forecast_input_des", result)
+            st.success(f"Input simulasi berhasil dibuat: {len(result):,} baris.")
+            m1, m2, m3, m4 = st.columns(4)
+            n_mon = result["MonthIndex"].nunique() if "MonthIndex" in result.columns else 1
+            _kpi(m1, "JUMLAH SKU", result["SkuId"].nunique() if "SkuId" in result.columns else "?")
+            _kpi(m2, "JUMLAH BULAN", n_mon)
+            if "ForecastTon" in result.columns:
+                _kpi(m3, "TOTAL FORECAST", f"{result['ForecastTon'].sum():,.1f} ton")
+                _kpi(m4, "RATA-RATA/BULAN", f"{result['ForecastTon'].sum()/n_mon:,.1f} ton")
+            st.dataframe(_rename_cols(result.head(30)), use_container_width=True, hide_index=True)
+            st.download_button(
+                "Unduh ForecastInput DES",
+                data=result.to_csv(index=False).encode(),
+                file_name="ForecastInput_DES.csv", mime="text/csv", key="dl_des",
+            )
         except Exception as e:
             import traceback
             st.error(f"Error: {e}")
-            st.code(traceback.format_exc())
+            with st.expander("Detail error"):
+                st.code(traceback.format_exc())
 
 
-def _build_des_input(fc_df: pd.DataFrame, master_asil: pd.DataFrame,
-                     adj_pct: float, qty_default: int) -> pd.DataFrame:
-    """
-    Gabungkan forecast + Master Data Asil → format ForecastInput DES.
-    Format output: ItemName, Qty, SkuId, ForecastTon, SkuGr, SpeedD, Speed,
-                   IsChocolate, port_type, Allergen, ShelfLife, MonthIndex
-    """
-    # Normalize master column names
+def _build_des_input(fc_df, master_asil, adj_pct, qty_default):
     ma = master_asil.copy()
     col_map = {}
     for c in ma.columns:
-        cl = c.strip()
-        if cl in ["SkuId","sku","SKU","ItemCode"]: col_map[c] = "SkuId"
-        elif cl == "ItemName": col_map[c] = "ItemName"
+        cs = c.strip()
+        if cs in ["SkuId","sku","SKU","ItemCode"]: col_map[c] = "SkuId"
+        elif cs == "ItemName": col_map[c] = "ItemName"
     ma = ma.rename(columns=col_map)
     if "SkuId" not in ma.columns:
         raise ValueError("Master Data tidak memiliki kolom SkuId.")
-
-    # Normalize forecast
     fc = fc_df.copy()
-    if "sku" not in fc.columns:
-        raise ValueError("Forecast tidak memiliki kolom sku.")
-
-    # Adjustment
     mult = 1 + adj_pct / 100
     fc["forecast"] = (fc["forecast"] * mult).clip(lower=0)
-
-    # Merge
     merged = fc.merge(ma, left_on="sku", right_on="SkuId", how="inner")
     if merged.empty:
         raise ValueError("Tidak ada SKU yang cocok antara forecast dan Master Data.")
-
-    # Build output
-    des_rows = []
+    rows = []
     for _, row in merged.iterrows():
         ton = float(row.get("forecast", 0))
         qty = max(int(round(ton)), qty_default) if ton > 0 else qty_default
-        des_rows.append({
-            "ItemName":    row.get("ItemName", row.get("description", "")),
-            "Qty":         qty,
-            "SkuId":       row.get("SkuId", row["sku"]),
+        rows.append({
+            "ItemName": row.get("ItemName", row.get("description", "")),
+            "Qty": qty, "SkuId": row.get("SkuId", row["sku"]),
             "ForecastTon": round(ton, 6),
-            "SkuGr":       row.get("SkuGr", ""),
-            "SpeedD":      row.get("SpeedD", 0),
-            "Speed":       row.get("Speed", 0),
+            "SkuGr": row.get("SkuGr", ""),
+            "SpeedD": row.get("SpeedD", 0), "Speed": row.get("Speed", 0),
             "IsChocolate": row.get("IsChocolate", ""),
-            "port_type":   row.get("port_type", ""),
-            "Allergen":    row.get("Allergen", ""),
-            "ShelfLife":   row.get("ShelfLife", ""),
-            "MonthIndex":  row.get("date", ""),
+            "port_type": row.get("port_type", ""),
+            "Allergen": row.get("Allergen", ""), "ShelfLife": row.get("ShelfLife", ""),
+            "MonthIndex": str(row.get("date", ""))[:10],
         })
-    return pd.DataFrame(des_rows)
+    return pd.DataFrame(rows)
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# TAB 3: VISUALISASI DEMAND
-# ─────────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3 — VISUALISASI DEMAND
+# ══════════════════════════════════════════════════════════════════════════════
 def _tab_visualisasi():
-    # Upload master SKU Gibran untuk enrichment kemasan
-    with st.expander("Upload Master SKU (Opsional — untuk deteksi kemasan otomatis)", expanded=False):
-        msku_file = st.file_uploader(
-            "Upload master_sku.csv", type=["csv","xlsx"], key="msku_gibran_upload",
-            label_visibility="collapsed",
-        )
-        if msku_file:
+    pkg_map = _load_pkg_map()
+
+    # ── Master SKU (opsi DB / upload) ────────────────────────────────────
+    has_db = MASTER_SKU_PATH.exists()
+    with st.expander(
+        "Master SKU — " + ("aktif dari database" if has_db else "belum tersedia"),
+        expanded=not has_db,
+    ):
+        if has_db:
             try:
-                msku = read_table(msku_file)
-                # Normalize sku column
-                first_col = msku.columns[0]
-                msku = msku.rename(columns={first_col: "_sku"})
-                msku["_sku"] = msku["_sku"].astype(str).str.strip()
-                set_state("master_sku_gibran", msku)
-                st.success(f"Master SKU dimuat: {len(msku)} baris.")
-            except Exception as e:
-                st.error(f"Gagal membaca: {e}")
+                msku = pd.read_csv(MASTER_SKU_PATH, encoding="latin-1", on_bad_lines="skip")
+                msku.columns = [c.strip() for c in msku.columns]
+                sku_col = msku.columns[0]
+                msku = msku.rename(columns={sku_col: "Kode SKU"})
+                show_cols = [c for c in ["Kode SKU","SIZE (g)","PORT TYPE"] if c in msku.columns]
+                st.markdown(f"**{len(msku)} SKU tersedia.**")
+                st.dataframe(msku[show_cols].head(12), use_container_width=True, hide_index=True)
+            except Exception:
+                pass
+        opt = st.radio("Sumber Master SKU", ["Database","Upload Manual"],
+                       horizontal=True, key="viz_msku_opt")
+        if opt == "Upload Manual":
+            mf = st.file_uploader("Upload master_sku.csv", type=["csv","xlsx"],
+                                  key="msku_upload_viz", label_visibility="collapsed")
+            if mf:
+                try:
+                    df_new = read_table(mf)
+                    Path("data/masters").mkdir(parents=True, exist_ok=True)
+                    df_new.to_csv(MASTER_SKU_PATH, index=False)
+                    _load_pkg_map.clear()
+                    st.success("Master SKU diperbarui.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Gagal: {e}")
 
-    # ── Upload CSV forecast (TIDAK auto-load dari DB) ────────────────────
-    st.markdown("<div class='section-title'>Upload Data Forecast</div>", unsafe_allow_html=True)
-    st.caption(
-        "Upload file hasil forecast (prophet_forecast_output.csv atau format serupa). "
-        "Kolom yang diperlukan: date, sku, forecast. Kolom opsional: description, mape_backtest."
-    )
+    pkg_map = _load_pkg_map()
 
-    # Cek apakah sudah ada di session dari Tab 1
+    # ── Upload CSV forecast ───────────────────────────────────────────────
+    st.markdown("<div class='section-title'>DATA FORECAST</div>", unsafe_allow_html=True)
+    st.caption("Upload file forecast dari export tab FORECASTING, atau gunakan data dari sesi ini.")
+
     fc_session = get_state("forecast_output")
-    has_session_fc = isinstance(fc_session, pd.DataFrame) and not fc_session.empty
-
-    use_session = False
-    if has_session_fc:
-        use_session = st.checkbox(
-            "Gunakan data forecast dari tab FORECASTING",
-            value=True, key="viz_use_session",
-        )
+    has_sess   = isinstance(fc_session, pd.DataFrame) and not fc_session.empty
 
     viz_df = None
-    if use_session and has_session_fc:
-        viz_df = fc_session.copy()
-    else:
-        viz_file = st.file_uploader(
-            "Upload CSV Forecast", type=["csv","xlsx"], key="viz_upload",
-            label_visibility="collapsed",
-        )
-        if viz_file:
+    if has_sess:
+        if st.checkbox("Gunakan data dari tab FORECASTING", value=True, key="viz_use_sess"):
+            viz_df = fc_session.copy()
+
+    if viz_df is None:
+        vf = st.file_uploader("Upload CSV Forecast", type=["csv","xlsx"],
+                               key="viz_upload", label_visibility="collapsed")
+        if vf:
             try:
-                viz_df = read_table(viz_file)
-                set_state("viz_forecast_df", viz_df)
+                viz_df = read_table(vf)
+                set_state("viz_cache", viz_df)
             except Exception as e:
                 st.error(f"Gagal membaca: {e}")
         else:
-            # Coba dari session viz khusus (dari upload sebelumnya di tab ini)
-            prev = get_state("viz_forecast_df")
-            if isinstance(prev, pd.DataFrame) and not prev.empty:
-                viz_df = prev
+            c = get_state("viz_cache")
+            if isinstance(c, pd.DataFrame) and not c.empty:
+                viz_df = c
 
-    if viz_df is None or (isinstance(viz_df, pd.DataFrame) and viz_df.empty):
+    if viz_df is None:
         st.markdown(
-            '<div class="note-box">Upload file forecast untuk menampilkan visualisasi demand.</div>',
+            '<div class="note-box">Upload file forecast untuk menampilkan visualisasi.</div>',
             unsafe_allow_html=True,
         )
         return
 
-    # Normalize + filter aktif
     viz_df = _clean_forecast(viz_df)
-    master_g = _load_master_gibran()
-
-    if "sku" in viz_df.columns:
-        viz_df["_pkg"] = viz_df["sku"].apply(lambda x: _detect_pkg_from_master(x, master_g))
-    elif "description" in viz_df.columns:
-        viz_df["_pkg"] = viz_df["description"].apply(_detect_pkg_fallback)
-    else:
-        viz_df["_pkg"] = "SSS"
-
-    if "sku" in viz_df.columns and "forecast" in viz_df.columns:
-        sku_totals = viz_df.groupby("sku")["forecast"].sum()
-        active_skus = sku_totals[sku_totals > 0].index
-        viz_df = viz_df[viz_df["sku"].isin(active_skus)].copy()
-
-    _render_forecast_charts(viz_df, context="tab3")
+    viz_df = _filter_active(viz_df)
+    viz_df = _add_pkg(viz_df, pkg_map)
+    sc_df  = _load_sku_classification()
+    _render_charts(viz_df, ctx="t3", sc_df=sc_df)
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# SHARED: Render forecast charts (dipakai Tab 1 & Tab 3)
-# ─────────────────────────────────────────────────────────────────────────
-def _render_forecast_charts(df: pd.DataFrame, context: str = ""):
+# ══════════════════════════════════════════════════════════════════════════════
+# SHARED CHARTS
+# ══════════════════════════════════════════════════════════════════════════════
+def _render_charts(df: pd.DataFrame, ctx: str = "x", sc_df=None):
     has_date  = "date" in df.columns
-    has_sku   = "sku" in df.columns
     has_val   = "forecast" in df.columns
+    has_sku   = "sku" in df.columns
     has_desc  = "description" in df.columns
     has_mape  = "mape_backtest" in df.columns
+    has_wmape = "wmape_backtest" in df.columns
+    has_patt  = "demand_pattern" in df.columns
+    has_model = "model_used" in df.columns
+    label_col = "description" if has_desc else ("sku" if has_sku else None)
 
-    label_col = "description" if has_desc else "sku" if has_sku else None
-
-    # ── KPI Cards ─────────────────────────────────────────────────────────
-    st.markdown("<div class='section-title'>RINGKASAN</div>", unsafe_allow_html=True)
-
-    n_sku   = df["sku"].nunique() if has_sku else "-"
-    n_month = df["date"].dropna().nunique() if has_date else 1
-    avg_m   = df["forecast"].sum() / max(n_month, 1) if has_val else 0
-
-    period_str = ""
-    if has_date:
-        mn, mx = df["date"].dropna().min(), df["date"].dropna().max()
-        if pd.notna(mn) and pd.notna(mx):
-            period_str = f"{mn.strftime('%b %Y')} – {mx.strftime('%b %Y')}"
-
-    # Avg MAPE per SKU (bukan per baris)
-    avg_mape = None
-    if has_mape and has_sku:
-        avg_mape = df.groupby("sku")["mape_backtest"].first().mean()
-    elif has_mape:
-        avg_mape = df["mape_backtest"].mean()
-
-    k1, k2, k3, k4 = st.columns(4)
-    for col_obj, lbl, val in [
-        (k1, "SKU AKTIF",     str(n_sku)),
-        (k2, "VOLUME/BULAN",  f"{avg_m:,.1f} ton" if has_val else "-"),
-        (k3, "PERIODE",       period_str or "-"),
-        (k4, "AKURASI MODEL", f"{avg_mape:.1f}%" if avg_mape is not None else "N/A"),
-    ]:
-        col_obj.markdown(
-            f'<div class="kpi-box">'
-            f'<div class="kpi-label">{lbl}</div>'
-            f'<div class="kpi-value">{val}</div></div>',
-            unsafe_allow_html=True,
-        )
-
-    # Warning MAPE
-    if avg_mape is not None and avg_mape > 30 and has_sku and has_mape:
-        n_hi = (df.groupby("sku")["mape_backtest"].first() > 30).sum()
-        if n_hi:
-            st.markdown(
-                f'<div class="warn-box">{n_hi} SKU memiliki MAPE &gt; 30% — gunakan angka dengan hati-hati.</div>',
-                unsafe_allow_html=True,
-            )
-
-    if not has_val or not label_col:
+    if not has_val or label_col is None:
         st.dataframe(df, use_container_width=True, hide_index=True)
         return
 
-    # ── Row 1: Volume per SKU + Donut Kemasan ───────────────────────────
+    # ── KPI ───────────────────────────────────────────────────────────────
+    st.markdown("<div class='section-title'>RINGKASAN</div>", unsafe_allow_html=True)
+    n_sku   = df["sku"].nunique() if has_sku else "-"
+    n_month = int(df["date"].dropna().nunique()) if has_date else 1
+    avg_m   = df["forecast"].sum() / max(n_month, 1)
+    period_str = ""
+    if has_date:
+        mn = df["date"].dropna().min(); mx = df["date"].dropna().max()
+        if pd.notna(mn) and pd.notna(mx):
+            period_str = f"{mn.strftime('%b %Y')} – {mx.strftime('%b %Y')}"
+
+    acc_val = None
+    acc_lbl = "AKURASI"
+    if has_sku and has_wmape:
+        acc_val = df.groupby("sku")["wmape_backtest"].first().dropna().mean()
+        acc_lbl = "WMAPE RATA-RATA"
+    elif has_sku and has_mape:
+        acc_val = df.groupby("sku")["mape_backtest"].first().dropna().mean()
+        acc_lbl = "MAPE RATA-RATA"
+
+    k1, k2, k3, k4 = st.columns(4)
+    _kpi(k1, "SKU AKTIF",     str(n_sku))
+    _kpi(k2, "VOLUME/BULAN",  f"{avg_m:,.1f} ton")
+    _kpi(k3, "PERIODE",       period_str or "-")
+    _kpi(k4, acc_lbl,         f"{acc_val:.1f}%" if acc_val is not None else "N/A")
+
+    if acc_val and acc_val > 30:
+        st.markdown(
+            '<div class="warn-box">Beberapa SKU memiliki akurasi rendah — verifikasi manual disarankan.</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Distribusi Model (jika ada) ───────────────────────────────────────
+    if has_model and has_patt and has_sku:
+        with st.expander("Distribusi Model & Pola Permintaan", expanded=False):
+            mc1, mc2 = st.columns(2)
+            with mc1:
+                seg_ct = df.drop_duplicates("sku")["demand_pattern"].value_counts().reset_index()
+                seg_ct.columns = ["Pola", "Jumlah SKU"]
+                fig_seg = px.bar(
+                    seg_ct, x="Pola", y="Jumlah SKU",
+                    color="Pola", color_discrete_map=SEG_COLORS, height=240,
+                )
+                fig_seg.update_layout(**_chart_kw(showlegend=False, title_text="Pola Permintaan"))
+                st.plotly_chart(fig_seg, use_container_width=True, key=f"seg_{ctx}")
+            with mc2:
+                mod_ct = df.drop_duplicates("sku")["model_used"].value_counts().reset_index()
+                mod_ct.columns = ["Model", "Jumlah SKU"]
+                fig_mod = px.pie(
+                    mod_ct, names="Model", values="Jumlah SKU",
+                    color="Model", color_discrete_map=MODEL_COLORS, height=240, hole=0.4,
+                )
+                fig_mod.update_layout(**_chart_kw(showlegend=True, title_text="Model Digunakan"))
+                st.plotly_chart(fig_mod, use_container_width=True, key=f"mod_{ctx}")
+
+    # ── Bar + Donut ───────────────────────────────────────────────────────
     st.markdown(
         "<div class='section-title'>VOLUME PER SKU & PROPORSI KEMASAN</div>",
         unsafe_allow_html=True,
     )
     ch1, ch2 = st.columns([3, 2])
 
-    # Pilih bulan
     if has_date:
         months = sorted(df["date"].dropna().unique())
         sel_m  = st.selectbox(
-            "Tampilkan untuk:",
-            months,
+            "Tampilkan untuk:", months,
             format_func=lambda x: pd.Timestamp(x).strftime("%b %Y"),
-            key=f"sel_month_{context}",
+            key=f"sel_month_{ctx}",
         )
-        m_df = df[df["date"] == sel_m].sort_values("forecast", ascending=True).tail(20)
+        m_df    = df[df["date"] == sel_m].sort_values("forecast").tail(20)
         pie_src = df[df["date"] == sel_m]
-        bulan_label = pd.Timestamp(sel_m).strftime("%b %Y")
+        bl      = pd.Timestamp(sel_m).strftime("%b %Y")
     else:
-        m_df = df.groupby([label_col, "_pkg"])["forecast"].sum().reset_index().sort_values("forecast").tail(20)
-        pie_src = df
-        bulan_label = "Semua"
+        m_df    = df.groupby([label_col,"_pkg"])["forecast"].sum().reset_index().sort_values("forecast").tail(20)
+        pie_src = df; bl = "Semua"
 
     with ch1:
         fig_b = px.bar(
-            m_df, y=label_col, x="forecast", color="_pkg",
-            orientation="h", color_discrete_map=PKG_COLORS,
-            height=440,
-            labels={"forecast": "ton", "_pkg": "Kemasan"},
+            m_df, y=label_col, x="forecast", color="_pkg", orientation="h",
+            color_discrete_map=PKG_COLORS, height=460,
+            labels={"forecast": "ton (volume)", "_pkg": "Jenis Kemasan"},
         )
-        fig_b.update_layout(**_chart_layout(
-            yaxis_title="", xaxis_title=f"ton ({bulan_label})",
-        ))
-        st.plotly_chart(fig_b, use_container_width=True)
+        fig_b.update_layout(**_chart_kw(yaxis_title="", xaxis_title=f"Volume ton ({bl})"))
+        st.plotly_chart(fig_b, use_container_width=True, key=f"bar_{ctx}")
 
     with ch2:
-        pkg_sum = pie_src.groupby("_pkg")["forecast"].sum().reset_index()
-        pkg_sum.columns = ["Kemasan", "Volume"]
-        pkg_sum = pkg_sum[pkg_sum["Volume"] > 0]
-
+        ps = pie_src.groupby("_pkg")["forecast"].sum().reset_index()
+        ps.columns = ["Kemasan","Volume"]
+        ps = ps[ps["Volume"] > 0]
         fig_pie = go.Figure(data=[go.Pie(
-            labels=pkg_sum["Kemasan"], values=pkg_sum["Volume"],
-            hole=0.45,
-            marker_colors=[PKG_COLORS.get(k, "#EBF4F6") for k in pkg_sum["Kemasan"]],
+            labels=ps["Kemasan"], values=ps["Volume"], hole=0.45,
+            marker_colors=[PKG_COLORS.get(k,"#EBF4F6") for k in ps["Kemasan"]],
             textinfo="percent+label", textfont_size=12,
         )])
         fig_pie.update_layout(
             plot_bgcolor=CHART_BG, paper_bgcolor=CHART_BG, font_color=FONT_COLOR,
-            showlegend=False,
-            margin=dict(l=10, r=10, t=36, b=10),
-            height=440,
-            title=dict(text=f"Kemasan — {bulan_label}", x=0.5, font=dict(size=13)),
+            showlegend=False, margin=dict(l=10,r=10,t=36,b=10), height=460,
+            title=dict(text=f"Proporsi Kemasan — {bl}", x=0.5, font=dict(size=13)),
         )
-        st.plotly_chart(fig_pie, use_container_width=True)
+        st.plotly_chart(fig_pie, use_container_width=True, key=f"pie_{ctx}")
 
-    # ── Row 2: Top 10 SKU ─────────────────────────────────────────────────
-    st.markdown("<div class='section-title'>TOP 10 SKU — RATA-RATA PER BULAN</div>", unsafe_allow_html=True)
-    top10 = df.groupby([label_col, "_pkg"])["forecast"].mean().reset_index()
-    top10.columns = ["nama", "kemasan", "avg"]
-    top10 = top10.sort_values("avg").tail(10)
-
-    fig_t = px.bar(
-        top10, y="nama", x="avg", color="kemasan", orientation="h",
-        color_discrete_map=PKG_COLORS, height=380,
-        labels={"avg": "avg ton/bln", "kemasan": "Kemasan"},
+    # ── Top 10 ───────────────────────────────────────────────────────────
+    st.markdown(
+        "<div class='section-title'>TOP 10 PRODUK — RATA-RATA PER BULAN</div>",
+        unsafe_allow_html=True,
     )
-    fig_t.update_layout(**_chart_layout(yaxis_title="", xaxis_title="avg ton/bln"))
-    st.plotly_chart(fig_t, use_container_width=True)
+    top10 = df.groupby([label_col,"_pkg"])["forecast"].mean().reset_index()
+    top10.columns = ["Produk","Kemasan","Rata-rata (ton/bln)"]
+    top10 = top10.sort_values("Rata-rata (ton/bln)").tail(10)
+    fig_t = px.bar(
+        top10, y="Produk", x="Rata-rata (ton/bln)", color="Kemasan", orientation="h",
+        color_discrete_map=PKG_COLORS, height=380,
+    )
+    fig_t.update_layout(**_chart_kw(yaxis_title="", xaxis_title="Rata-rata ton/bulan"))
+    st.plotly_chart(fig_t, use_container_width=True, key=f"top10_{ctx}")
 
-    # ── Row 3: Tren Bulanan per Kemasan ──────────────────────────────────
+    # ── Tren ─────────────────────────────────────────────────────────────
     if has_date:
         st.markdown(
-            "<div class='section-title'>TREN BULANAN PER TIPE KEMASAN</div>",
+            "<div class='section-title'>TREN BULANAN PER JENIS KEMASAN</div>",
             unsafe_allow_html=True,
         )
-        trend = df.groupby(["date", "_pkg"])["forecast"].sum().reset_index()
+        trend = df.groupby(["date","_pkg"])["forecast"].sum().reset_index()
+        trend.columns = ["Tanggal","Kemasan","Volume (ton)"]
         fig_l = px.line(
-            trend, x="date", y="forecast", color="_pkg", markers=True,
+            trend, x="Tanggal", y="Volume (ton)", color="Kemasan", markers=True,
             color_discrete_map=PKG_COLORS, height=300,
-            labels={"forecast": "ton", "_pkg": "Kemasan"},
         )
-        fig_l.update_layout(**_chart_layout(xaxis_title="", yaxis_title="ton"))
-        st.plotly_chart(fig_l, use_container_width=True)
+        fig_l.update_layout(**_chart_kw(xaxis_title="", yaxis_title="Volume (ton)"))
+        st.plotly_chart(fig_l, use_container_width=True, key=f"trend_{ctx}")
