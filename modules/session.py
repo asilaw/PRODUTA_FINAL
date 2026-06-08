@@ -42,6 +42,10 @@ def clear_capacity_results():
         st.session_state[k] = DEFAULTS.get(k, pd.DataFrame())
 
 # Student-compatible
+# Keys yang TIDAK boleh di-persist/load dari disk (selalu harus fresh dari session/upload)
+_NO_DISK_CACHE = {"simulation", "simulation_result", "scenario_config",
+                  "planned_jobs", "input_data", "export_bytes"}
+
 def get(key):
     init_session()
     v = st.session_state.get(key)
@@ -51,6 +55,9 @@ def get(key):
         elif isinstance(v, (bytes, bytearray)) and len(v) > 0: return v
         elif isinstance(v, list) and len(v) > 0: return v
         elif v: return v
+    # Jangan baca dari disk untuk simulation data
+    if key in _NO_DISK_CACHE:
+        return DEFAULTS.get(key, pd.DataFrame())
     p = CACHE_DIR / f"{key}.pkl"
     if p.exists():
         try:
@@ -70,32 +77,22 @@ def set_(key, val):
     except: pass
 
 
-def upload_widget(key: str, label: str, loader_fn, accepted: list = None, key_suffix: str = ""):
-    """
-    Reusable file uploader that caches bytes in session + disk.
-    Returns the loaded DataFrame (or whatever loader_fn returns).
-    """
-    import streamlit as st
-    import pandas as pd
+def upload_widget(key: str, label: str, loader_fn, key_suffix: str = "",
+                  file_types=None):
+    """File uploader with session cache. Returns DataFrame."""
+    file_types = file_types or ["csv", "xlsx", "xls", "tsv"]
     cached = get(key)
-    cached_bytes = get(f"_{key}_bytes")
-    cached_name  = get(f"_{key}_name")
-
-    if isinstance(cached_bytes, (bytes, bytearray)) and len(cached_bytes) > 0:
-        st.caption(f"✓ File terakhir: **{cached_name}**")
-
-    accept = accepted or ["csv","tsv","xlsx","xls"]
-    f = st.file_uploader(label, type=accept, key=f"{key}_uploader{key_suffix}")
-    if f is not None:
-        raw = f.read()
-        import io
-        result = loader_fn(io.BytesIO(raw))
-        set_(key, result)
-        set_(f"_{key}_bytes", raw)
-        set_(f"_{key}_name",  f.name)
-        return result
-
-    # Return cached
-    if isinstance(cached, pd.DataFrame) and not cached.empty:
-        return cached
-    return pd.DataFrame()
+    has_cache = isinstance(cached, pd.DataFrame) and not cached.empty
+    if has_cache:
+        st.success(f"{label} dimuat ({len(cached)} baris)")
+    uploaded = st.file_uploader(f"Upload {label}", type=file_types,
+                                key=f"uw_{key}{key_suffix}",
+                                label_visibility="collapsed")
+    if uploaded is not None:
+        try:
+            df = loader_fn(uploaded.read())
+            set_(key, df)
+            return df
+        except Exception as e:
+            st.error(f"Gagal membaca file: {e}")
+    return cached if has_cache else pd.DataFrame()

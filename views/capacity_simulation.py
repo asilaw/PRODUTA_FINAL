@@ -72,16 +72,24 @@ def _plot_outputs(result_df):
 
 
 def render():
-    hero("Capacity Simulation", "Simulasi kapasitas lini produksi berdasarkan data permintaan dan skenario operasi.")
-    note("Parameter availability dan downtime bersifat opsional. Nilai default (100% / 0 hari) menggunakan jadwal penuh tanpa gangguan.")
+    st.markdown(
+        '<div class="page-title">CAPACITY SIMULATION</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<p style="color:#088395;font-size:.88rem;margin:-12px 0 18px 0;">'
+        'Simulasi kapasitas lini produksi berbasis Discrete Event Simulation.</p>',
+        unsafe_allow_html=True,
+    )
+    note("Parameter availability dan downtime bersifat opsional. Nilai default: jadwal penuh tanpa gangguan.")
 
     st.markdown("<div class='section-title'>Input Data</div>", unsafe_allow_html=True)
     source = st.radio(
-        "Sumber ForecastInput DES",
-        ["Dari Demand Overview", "Upload file"],
+        "Sumber Data Input",
+        ["Dari Demand & Forecasting", "Upload file"],
         horizontal=True,
     )
-    if source == "Dari Demand Overview":
+    if source == "Dari Demand & Forecasting":
         forecast_input = get_state("forecast_input_des")
         source_note = "session: Demand Overview"
     else:
@@ -96,7 +104,7 @@ def render():
             st.error("Paste tabel belum bisa dibaca.")
 
     if forecast_input is None or forecast_input.empty:
-        warning("ForecastInput DES belum tersedia. Buat dari Demand Overview, upload file, atau masukkan file ke folder <code>data/capacity_input_here/</code>.")
+        warning("Data input belum tersedia. Buat dari Demand Overview atau upload file.")
     else:
         st.caption(f"Input source: {source_note}")
         st.dataframe(forecast_input.head(120), use_container_width=True, hide_index=True)
@@ -127,7 +135,7 @@ def render():
     with c1:
         batch_options = st.multiselect("Batch Mode", ["B35", "BLOSS"], default=["B35", "BLOSS"])
     with c2:
-        growth_mode = st.radio("Skenario Pertumbuhan", ["Checklist", "Range"], horizontal=False)
+        growth_mode = st.radio("Pertumbuhan Demand", ["Checklist", "Range"], horizontal=False)
     with c3:
         if growth_mode == "Checklist":
             growth_options = st.multiselect("Growth Demand (%)", [0, 5, 10], default=[0])
@@ -146,7 +154,7 @@ def render():
         holiday_dates = st.text_area("Tanggal libur manual opsional", placeholder="Contoh: 2026-01-01, 2026-03-20, 2026-12-25", height=80)
 
     total_possible = estimate_scenario_count(b_days, b_hours, g_days, g_hours, d_days, d_hours, batch_options, growth_options)
-    st.caption(f"Estimasi skenario: {total_possible:,}. App menjalankan maksimal {int(max_scenarios):,} skenario.")
+    st.caption(f"Estimasi kombinasi: {total_possible:,}. App menjalankan maksimal {int(max_scenarios):,} skenario.")
 
     run_col, clear_col = st.columns([1, 1])
     with run_col:
@@ -198,7 +206,7 @@ def render():
         return
 
     _summary_cards(result_df, {"products_analyzed": len(input_df) if input_df is not None else 0, "holiday_days": holiday_cutoff})
-    data_tabs = st.tabs(["Simulation Result", "Scenario Configuration", "Production Plan", "Input Data", "Charts", "Export Result"])
+    data_tabs = st.tabs(["Simulation Result", "Scenario Configuration", "Production Plan", "Input", "Charts", "Export Result"])
     with data_tabs[0]:
         st.dataframe(result_df, use_container_width=True, hide_index=True)
     with data_tabs[1]:
@@ -215,3 +223,23 @@ def render():
             st.download_button("Download Excel Result", data=export_payload["bytes"], file_name=export_payload["name"], mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         else:
             st.info("Export belum tersedia. Run simulation terlebih dahulu.")
+
+    # ── Export CSV Skenario untuk Capacity Planning ──────────────────────────────
+    st.markdown("<div class='section-title'>Export CSV Skenario</div>", unsafe_allow_html=True)
+    st.caption(
+        "Download file CSV hasil simulasi ini untuk digunakan langsung sebagai input "        "di menu Capacity Planning, tanpa perlu mengulang pipeline dari awal."
+    )
+    if result_df is not None and not result_df.empty:
+        # Pastikan kolom yang dibutuhkan ada sebelum export
+        export_sim = result_df.copy()
+        csv_bytes = export_sim.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Unduh CSV Skenario DES",
+            data=csv_bytes,
+            file_name="simulation_scenarios_DES.csv",
+            mime="text/csv",
+            help="File ini dapat diupload langsung ke menu Capacity Planning.",
+        )
+        st.info(f"File berisi {len(export_sim)} skenario dengan {len(export_sim.columns)} kolom.")
+    else:
+        st.info("Jalankan DES Simulation terlebih dahulu untuk mengaktifkan export.")

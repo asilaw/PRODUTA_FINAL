@@ -69,17 +69,17 @@ def render():
 
     # ── Page ───────────────────────────────────────────────────────────────────────
     st.markdown('<p class="page-title">Konfigurasi Investasi</p>',unsafe_allow_html=True)
-    st.caption("Konfigurasi komponen mesin dan parameter finansial untuk analisis kelayakan investasi.")
+    st.caption("Kelola katalog mesin, paket investasi, dan parameter finansial yang digunakan oleh seluruh menu DSS.")
 
     cat = load_catalog()
     _changed = False
 
-    tab_mesin, tab_paket, tab_param = st.tabs(["Katalog Mesin", "Paket Investasi", "Parameter Finansial"])
+    tab_mesin, tab_paket, tab_param = st.tabs([" Katalog Mesin", " Paket Investasi", " Parameter Finansial"])
 
     # ─────────────────────────────────────────────────────────────────────────────
     with tab_mesin:
         st.markdown("### Daftar Mesin")
-        st.caption("Daftar mesin beserta estimasi biaya. Dapat diperbarui sesuai harga aktual.")
+        st.caption("Harga CAPEX dan tarif OPEX per mesin. Perubahan otomatis dipakai oleh menu Capacity Planning dan Production Allocation.")
 
         machines = cat["machines"]
         _to_delete = None
@@ -98,7 +98,7 @@ def render():
                         float(m.get("opex_rate",0.05))*100, 0.5, key=f"mo_{key}") / 100
                 with c3:
                     m["url"] = st.text_input("URL Referensi", m.get("url",""), key=f"mu_{key}")
-                    if st.button("🗑 Hapus", key=f"del_{key}", type="secondary"):
+                    if st.button(" Hapus", key=f"del_{key}", type="secondary"):
                         _to_delete = key
             _changed = True
 
@@ -108,7 +108,7 @@ def render():
             st.rerun()
 
         st.markdown("---")
-        with st.expander("Tambah Mesin"):
+        with st.expander(" Tambah Mesin Baru"):
             nc1,nc2 = st.columns(2)
             with nc1:
                 new_key   = st.text_input("ID Mesin (unik, huruf kecil_)", key="new_mk")
@@ -127,7 +127,7 @@ def render():
                     save_catalog(cat)
                     st.success(f"Mesin '{new_name}' ditambahkan."); st.rerun()
 
-        if st.button("💾 Simpan Perubahan Mesin", type="primary"):
+        if st.button(" Simpan Perubahan Mesin", type="primary"):
             save_catalog(cat)
             st.success("Katalog mesin disimpan.")
 
@@ -185,7 +185,7 @@ def render():
                 st.caption(f"OPEX/thn: maintenance {fmt_rp(pkg['maintenance_annual'])} "
                            f"+ operator Rp 76.6M + QC Rp 76.6M = {fmt_rp(pkg['maintenance_annual']+153_294_220)}/thn")
 
-        if st.button("💾 Simpan Paket", type="primary"):
+        if st.button(" Simpan Paket", type="primary"):
             save_catalog(cat)
             st.success("Paket investasi disimpan.")
 
@@ -217,7 +217,7 @@ def render():
             annual_staff = int(umr * (12+thr_m) * (1+bpjs_pct/100))
             st.metric("Total/orang/tahun", fmt_rp(annual_staff))
 
-        if st.button("💾 Simpan Parameter", type="primary"):
+        if st.button(" Simpan Parameter", type="primary"):
             cat["global_params"] = {
                 "wacc": wacc_g/100, "tax_rate": tax_g/100,
                 "project_life": life_g, "asset_life": life_a,
