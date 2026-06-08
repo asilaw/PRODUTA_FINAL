@@ -4,6 +4,7 @@ Decision Support System — PT FBMI Lactalis, TIN IPB 2026
 import streamlit as st
 import streamlit.components.v1 as _stc
 from pathlib import Path
+import base64
 from modules.session import init_session, get_state, set_state
 
 LOGO        = "assets/lactalis_logo.png"
@@ -54,128 +55,113 @@ def _auto_login():
 def auth_page():
     _stc.html("<script>document.title='Decision Support System — Masuk'</script>", height=0)
 
-    st.markdown("""
+    logo_b64 = ""
+    for p in [LOGO_SQUARE, LOGO]:
+        if Path(p).exists():
+            logo_b64 = base64.b64encode(open(p, "rb").read()).decode()
+            break
+    logo_img = (
+        f'<img src="data:image/png;base64,{logo_b64}" '        f'style="width:260px;margin-bottom:36px;display:block;position:relative;z-index:1;" />'
+        if logo_b64 else ""
+    )
+
+    # CSS: sembunyikan Streamlit chrome, kolom kiri full-height biru, kanan putih
+    st.markdown(f"""
     <style>
-    /* Hide streamlit chrome on login */
-    [data-testid="stHeader"],
-    [data-testid="stSidebar"],
-    [data-testid="stToolbar"],
-    footer { display: none !important; }
-
-    /* Remove ALL padding/margin from root */
-    html, body { margin: 0 !important; padding: 0 !important; height: 100%; }
-    [data-testid="stAppViewContainer"] {
-        padding: 0 !important; margin: 0 !important;
-        min-height: 100vh;
-    }
-    section.main > div {
-        padding: 0 !important; margin: 0 !important;
-    }
-    section.main {
-        padding: 0 !important;
-    }
-    /* Remove column gap */
-    [data-testid="column"] { padding: 0 !important; }
-
-    /* Left panel — full height */
-    .lp-left {
-        min-height: 100vh;
-        background: linear-gradient(150deg, #071952 0%, #088395 65%, #37B7C3 100%);
-        padding: 56px 52px;
-        position: relative;
-        overflow: hidden;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-    }
-    .lp-left::before {
-        content: '';
-        position: absolute; top: -100px; right: -100px;
-        width: 380px; height: 380px; border-radius: 50%;
-        border: 70px solid rgba(255,255,255,0.06);
-        pointer-events: none;
-    }
-    .lp-left::after {
-        content: '';
-        position: absolute; bottom: -80px; left: -60px;
-        width: 280px; height: 280px; border-radius: 50%;
-        border: 55px solid rgba(255,255,255,0.04);
-        pointer-events: none;
-    }
-    .lp-left img { width: 240px; margin-bottom: 36px; position: relative; z-index: 1; }
-    .lp-left h1 {
-        color: #FFFFFF !important;
-        font-size: 2.45rem; font-weight: 900;
-        line-height: 1.22; margin: 0 0 18px;
-        position: relative; z-index: 1;
-        text-transform: uppercase;
-        text-align: justify;
-        text-align-last: left;
-        letter-spacing: 0.01em;
-    }
-    .lp-left p {
-        color: rgba(255,255,255,0.80);
-        font-size: .98rem; line-height: 1.6;
-        max-width: 340px;
-        position: relative; z-index: 1;
-        margin: 0 0 auto;
-        text-align: justify;
-        text-justify: inter-word;
-    }
-    .lp-brand {
-        color: rgba(255,255,255,0.42);
-        font-size: .75rem;
-        position: relative; z-index: 1;
-        margin-top: 48px;
-    }
-
-    /* Right panel — full height, white */
-    .lp-right {
-        min-height: 100vh;
-        background: #ffffff;
-        padding: 56px 64px;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-    }
-    .lp-right h2 {
-        font-size: 2.1rem; font-weight: 900;
-        color: #071952 !important; margin: 0 0 6px;
-        letter-spacing: .02em; text-transform: uppercase;
-    }
-    .lp-right .sub {
-        color: #088395; font-size: .9rem; margin-bottom: 32px;
-    }
+    [data-testid="stHeader"],[data-testid="stSidebar"],
+    [data-testid="stToolbar"],footer,#MainMenu {{
+        display:none!important;
+    }}
+    html,body,[data-testid="stAppViewContainer"]{{
+        margin:0!important;padding:0!important;
+    }}
+    section.main,.block-container{{
+        padding:0!important;max-width:100%!important;margin:0!important;
+    }}
+    /* Pastikan horizontal block stretch full height, tanpa gap */
+    [data-testid="stHorizontalBlock"]{{
+        gap:0!important;
+        align-items:stretch!important;
+    }}
+    /* Kolom kiri: background gradient, full viewport height */
+    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(1){{
+        background:linear-gradient(150deg,#071952 0%,#088395 65%,#37B7C3 100%)!important;
+        min-height:100vh!important;
+        padding:0!important;
+    }}
+    /* Kolom kanan: putih, full viewport height, padding untuk konten */
+    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(2){{
+        background:#ffffff!important;
+        min-height:100vh!important;
+        padding:60px 64px!important;
+        display:flex!important;
+        flex-direction:column!important;
+        justify-content:center!important;
+    }}
+    /* Elemen dalam kolom kanan tidak perlu padding tambahan */
+    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(2) .stTextInput,
+    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(2) .stButton,
+    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(2) p {{
+        color:#071952;
+    }}
+    .lp-inner{{
+        padding:56px 52px;
+        min-height:100vh;
+        display:flex;
+        flex-direction:column;
+        justify-content:center;
+        position:relative;
+        overflow:hidden;
+        box-sizing:border-box;
+    }}
+    .lp-inner::before{{
+        content:"";position:absolute;top:-100px;right:-100px;
+        width:380px;height:380px;border-radius:50%;
+        border:70px solid rgba(255,255,255,.06);pointer-events:none;
+    }}
+    .lp-inner::after{{
+        content:"";position:absolute;bottom:-80px;left:-60px;
+        width:280px;height:280px;border-radius:50%;
+        border:55px solid rgba(255,255,255,.04);pointer-events:none;
+    }}
+    .lp-h1{{
+        color:#fff!important;font-size:2.55rem;font-weight:900;
+        line-height:1.22;margin:0 0 18px;
+        text-transform:uppercase;text-align:left;
+        position:relative;z-index:1;
+    }}
+    .lp-p{{
+        color:rgba(255,255,255,.80);font-size:.98rem;line-height:1.6;
+        max-width:340px;margin:0;text-align:left;
+        position:relative;z-index:1;
+    }}
+    .lp-brand{{
+        color:rgba(255,255,255,.42);font-size:.75rem;
+        margin-top:48px;position:relative;z-index:1;
+    }}
     </style>
     """, unsafe_allow_html=True)
 
-    left_col, right_col = st.columns([1, 1], gap="small")
+    col_l, col_r = st.columns([1, 1], gap="small")
 
-    # ── Left panel ──────────────────────────────────────────────────────
-    with left_col:
-        logo_b64 = ""
-        if Path(LOGO).exists():
-            import base64
-            logo_b64 = base64.b64encode(open(LOGO, "rb").read()).decode()
-
-        logo_tag = f'<img src="data:image/png;base64,{logo_b64}" />' if logo_b64 else ""
+    with col_l:
         st.markdown(f"""
-        <div class="lp-left">
-            {logo_tag}
-            <h1>SISTEM PENGAMBILAN KEPUTUSAN KAPASITAS PRODUKSI</h1>
-            <p>Platform terintegrasi pendukung keputusan kapasitas produksi PT FBMI.</p>
+        <div class="lp-inner">
+            {logo_img}
+            <div class="lp-h1">SISTEM PENGAMBILAN<br>KEPUTUSAN<br>KAPASITAS PRODUKSI</div>
+            <p class="lp-p">Platform terintegrasi pendukung keputusan kapasitas produksi PT FBMI.</p>
             <div class="lp-brand">PT FBMI &middot; Lactalis Group &middot; IPB University &middot; 2026</div>
         </div>
         """, unsafe_allow_html=True)
 
-    # ── Right panel ─────────────────────────────────────────────────────
-    with right_col:
-        st.markdown("""
-        <div class="lp-right">
-            <h2>SELAMAT DATANG</h2>
-            <div class="sub">Masuk untuk mengakses sistem atau daftar akun baru.</div>
-        </div>
-        """, unsafe_allow_html=True)
+    with col_r:
+        st.markdown(
+            "<h2 style='font-size:2.2rem;font-weight:900;color:#071952;margin:0 0 8px;"
+            "text-transform:uppercase;letter-spacing:.01em;'>SELAMAT DATANG</h2>"
+            "<p style='color:#088395;font-size:.92rem;margin-bottom:28px;'>"
+            "Masuk untuk mengakses sistem atau daftar akun baru.</p>",
+            unsafe_allow_html=True,
+        )
 
         login_tab, reg_tab = st.tabs(["Masuk", "Daftar Akun"])
 
@@ -201,14 +187,11 @@ def auth_page():
 
         with reg_tab:
             st.caption("Password: min. 8 karakter, mengandung angka dan simbol.")
-            r_name = st.text_input("Nama Lengkap", key="r_name",
-                                    placeholder="Nama lengkap Anda")
-            r_user = st.text_input("Username", key="r_user",
-                                    placeholder="Pilih username unik")
-            r_pwd  = st.text_input("Password", type="password", key="r_pwd")
+            r_name = st.text_input("Nama Lengkap", key="r_name", placeholder="Nama lengkap Anda")
+            r_user = st.text_input("Username",     key="r_user", placeholder="Pilih username unik")
+            r_pwd  = st.text_input("Password",     type="password", key="r_pwd")
             r_pwd2 = st.text_input("Konfirmasi Password", type="password", key="r_pwd2")
-            if st.button("Daftar Akun", type="primary", use_container_width=True,
-                          key="btn_reg"):
+            if st.button("Daftar Akun", type="primary", use_container_width=True, key="btn_reg"):
                 if not r_name.strip():   st.error("Nama tidak boleh kosong.")
                 elif not r_user.strip(): st.error("Username tidak boleh kosong.")
                 elif r_pwd != r_pwd2:    st.error("Konfirmasi password tidak cocok.")
@@ -220,7 +203,6 @@ def auth_page():
                         ok, msg = register(r_user.strip(), r_pwd, r_name.strip())
                         if ok: st.success("Akun berhasil dibuat. Silakan masuk.")
                         else:  st.error(msg)
-
 
 # ── MAIN APP ────────────────────────────────────────────────────────────────
 if not _auto_login():
