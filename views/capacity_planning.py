@@ -108,27 +108,53 @@ def render():
             if isinstance(_uploaded, pd.DataFrame) and not _uploaded.empty:
                 set_state("simulation_result", _uploaded)
         st.markdown("---")
-        st.markdown("### Parameter")
+        st.markdown("### Parameter Evaluasi")
         util_warn=st.slider("Batas Utilisasi (%)",60,95,85,5,
-            help="Utilisasi di atas batas ini = MODIFY (risiko kapasitas, meski demand terpenuhi)")
-        maintain_thresh=2.0  # hardcoded fallback — tidak perlu diekspos user
-        st.markdown("---")
-        st.markdown("### Finansial")
-        params={
-            "discount_rate":st.number_input("Discount Rate",0.05,0.30,DEFAULT_PARAMS["discount_rate"],0.01,format="%.2f"),
-            "project_lifetime_year":st.number_input("Umur Proyek (thn)",3,15,int(DEFAULT_PARAMS["project_lifetime_year"])),
-            "payback_threshold_year":st.number_input("Batas Payback (thn)",1,7,int(DEFAULT_PARAMS["payback_threshold_year"])),
-            "realization_factor":st.slider("Faktor Realisasi",0.5,1.0,DEFAULT_PARAMS["realization_factor"],0.05),
-            "internal_value_per_ton":st.number_input("Opportunity Value/Ton (Rp)",500_000,5_000_000,int(DEFAULT_PARAMS["internal_value_per_ton"]),100_000),
-            "minimum_irr":DEFAULT_PARAMS["minimum_irr"],
-            "minimum_roi":DEFAULT_PARAMS["minimum_roi"],
-            "minimum_npv":DEFAULT_PARAMS["minimum_npv"],
+            help="Utilisasi di atas batas ini → keputusan MODIFY (risiko bottleneck)")
+        maintain_thresh=2.0
+
+        # ── Load params finansial dari catalog (Parameter Investasi) ──────────
+        import json as _json
+        _cat_path = Path("data/machine_catalog.json")
+        _cat_gp   = {}
+        if _cat_path.exists():
+            try:
+                _cat_gp = _json.load(open(_cat_path)).get("global_params", {})
+            except Exception:
+                pass
+        def _gp(k): return _cat_gp.get(k, DEFAULT_PARAMS.get(k))
+        params = {
+            "discount_rate":          float(_gp("discount_rate")),
+            "project_lifetime_year":  int(_gp("project_lifetime_year")),
+            "payback_threshold_year": int(_gp("payback_threshold_year")),
+            "realization_factor":     float(_gp("realization_factor")),
+            "internal_value_per_ton": float(_gp("internal_value_per_ton")),
+            "maklon_cost_per_ton":    float(_gp("maklon_cost_per_ton")),
+            "internal_cost_per_ton":  float(_gp("internal_cost_per_ton")),
+            "minimum_irr":            float(_gp("minimum_irr")),
+            "minimum_roi":            float(_gp("minimum_roi")),
+            "minimum_npv":            float(_gp("minimum_npv")),
+            "tax_rate":               float(_gp("tax_rate")),
+            "useful_life_year":       int(_gp("useful_life_year")),
         }
+        _opex_data = {}
+        if _cat_path.exists():
+            try: _opex_data = _json.load(open(_cat_path)).get("opex_manpower", {})
+            except: pass
+        params["maintenance_annual"] = float(
+            _opex_data.get("maintenance_annual", DEFAULT_PARAMS.get("maintenance_annual", 240_000_000)))
+        st.markdown(
+            f'<div style="font-size:.72rem;color:#37B7C3;margin-top:4px;">'
+            f'Parameter finansial dari menu <b>Parameter Investasi</b>.<br>'
+            f'Discount: {params["discount_rate"]*100:.0f}% | '
+            f'Proyek: {params["project_lifetime_year"]} thn | '
+            f'IRR min: {params["minimum_irr"]*100:.0f}%</div>',
+            unsafe_allow_html=True)
 
 
     # ── Header ────────────────────────────────────────────────────────────────────
-    st.markdown('<div class="page-title">CAPACITY PLANNING</div>', unsafe_allow_html=True)
-    st.caption("v2025-05-25")
+    st.markdown('<div class="page-title">EVALUASI KAPASITAS</div>', unsafe_allow_html=True)
+    st.caption("Evaluasi skenario kapasitas produksi — skoring FIS, keputusan investasi, dan analisis kelayakan finansial.")
 
     # ── Ambil data simulasi: prioritas session DES, fallback upload manual ──────
     from modules.data_loader import _normalize_sim_columns as _ncols
@@ -253,24 +279,18 @@ def render():
         })
 
     rank_df=pd.DataFrame(results)
-    # ── Ranking: FIS hanya sebagai gate MAINTAIN/MODIFY.
-    # Dalam MODIFY: efisiensi (Finished% tinggi + jam sedikit = lebih efisien)
-    # Ranking: FIS hanya sebagai gate MAINTAIN/MODIFY.
-    # Dalam MODIFY: Finished% tinggi → Total_System_Hrs kecil (lebih efisien) → Unmet% → Util Max
-    _DEC_ORDER = {"MAINTAIN":0,"MODIFY":1}
+    # ── Ranking: Selaras dengan DES (Asil) ──────────────────────────────────
+    # Primary : Tons Finished desc  (sama persis dengan DES sort utama)
+    # Secondary: Unmet Demand Ton asc (sama persis dengan DES sort sekunder)
+    # Tertiary : FIS score asc (skenario dengan volume sama → pilih risiko rendah)
+    # FIS hanya sebagai gate penentu MAINTAIN/MODIFY, bukan penentu urutan ranking
     rank_df["_sort"]=rank_df.apply(lambda r:(
-        _DEC_ORDER.get(r["Keputusan"],2),
-        # MODIFY: sort by Selesai% desc → FIS asc → Util Max asc
-        -round(r.get("Selesai (%)",r.get("Finished %",0)),2)
-            if r["Keputusan"]=="MODIFY" else 0,
-        round(r.get("Skor FIS",r.get("FIS Score",3.0)),4)
-            if r["Keputusan"]=="MODIFY" else 0,
-        round(r.get("Util Max (%)",r.get("Util Max",0)),2)
-            if r["Keputusan"]=="MODIFY" else 0,
-        # MAINTAIN: sort by Util Max asc (util rendah = lebih aman)
-        round(r.get("Util Max (%)",r.get("Util Max",0)),1)
-            if r["Keputusan"]=="MAINTAIN" else 0,
-        round(r.get("Unmet (%)",r.get("Unmet %",0)),2),
+        # Tons Finished desc → negasi agar ascending sort = terbesar di atas
+        -round(r.get("Ton Selesai",r.get("Tons Finished",0)),2),
+        # Unmet Demand asc (lebih sedikit unmet = lebih baik)
+        round(r.get("Unmet (ton)",r.get("Unmet Demand Ton",0)),2),
+        # FIS score asc sebagai tie-breaker (risiko lebih rendah = lebih baik)
+        round(r.get("Skor FIS",r.get("FIS Score",3.0)),4),
     ),axis=1)
     rank_df=rank_df.sort_values("_sort").reset_index(drop=True)
     rank_df["Rank"]=rank_df.index+1
@@ -418,44 +438,61 @@ def render():
                 unsafe_allow_html=True,
             )
 
-        # Grafik utilisasi dan tonase
+        # Grafik utilisasi dan tonase — mengikuti skenario yang dipilih
+        # Overview: semua skenario; skenario terpilih di-highlight
         _mc1, _mc2 = st.columns(2)
         with _mc1:
             st.markdown("<div class='section-title'>UTILISASI PER LINI</div>", unsafe_allow_html=True)
-            _util_data = []
-            for _, r in rank_df.iterrows():
-                _lbl = str(r.get("Label","?"))[:25]
-                for lini, col in [("Line B","Util B (%)"),("Line G","Util G (%)"),("Line D","Util D (%)")]:
-                    _util_data.append({"Skenario": _lbl, "Lini": lini,
-                                       "Utilisasi (%)": round(float(r.get(col, r.get(col.replace(" (%)",""),0))),1)})
-            _util_df = pd.DataFrame(_util_data)
-            fig_util = px.bar(_util_df, x="Skenario", y="Utilisasi (%)", color="Lini",
-                barmode="group", height=280,
-                color_discrete_map={"Line B":"#071952","Line G":"#088395","Line D":"#37B7C3"})
+            # Gauge indicator untuk skenario terpilih
+            _ub = float(sel_mrow.get("Util B (%)", sel_mrow.get("Util B", 0)))
+            _ug = float(sel_mrow.get("Util G (%)", sel_mrow.get("Util G", 0)))
+            _ud = float(sel_mrow.get("Util D (%)", sel_mrow.get("Util D", 0)))
+            fig_util = go.Figure()
+            _lini_labels = ["Filling B", "Filling G", "Filling D"]
+            _lini_vals   = [_ub, _ug, _ud]
+            _lini_colors = ["#071952", "#088395", "#37B7C3"]
+            for _li, _lv, _lc in zip(_lini_labels, _lini_vals, _lini_colors):
+                _warn_bar = _lv >= util_warn
+                fig_util.add_trace(go.Bar(
+                    name=_li, x=[_li], y=[_lv],
+                    marker_color=["#d29922" if _warn_bar else _lc],
+                    text=[f"{_lv:.1f}%"], textposition="outside",
+                    textfont=dict(size=13, color="#071952"),
+                ))
             fig_util.add_hline(y=util_warn, line_dash="dot", line_color="#d29922",
-                               annotation_text=f"Batas {util_warn}%")
-            fig_util.update_layout(template="plotly_white", paper_bgcolor="#FFFFFF",
-                plot_bgcolor="#FFFFFF", margin=dict(l=0,r=0,t=8,b=60),
-                xaxis_tickangle=-30, legend=dict(orientation="h",y=-0.4),
-                yaxis=dict(range=[0,110]))
+                annotation_text=f"Batas {util_warn}%", annotation_font_color="#d29922")
+            fig_util.update_layout(
+                template="plotly_white", paper_bgcolor="#FFFFFF", plot_bgcolor="#FFFFFF",
+                margin=dict(l=0, r=0, t=24, b=20), showlegend=False, height=260,
+                yaxis=dict(range=[0, 110], title="Utilisasi (%)", gridcolor="#EBF4F6"),
+                xaxis=dict(title=""),
+                bargap=0.35,
+            )
             st.plotly_chart(fig_util, use_container_width=True)
 
         with _mc2:
             st.markdown("<div class='section-title'>TONASE PER LINI</div>", unsafe_allow_html=True)
-            _ton_data = []
-            for _, r in rank_df.iterrows():
-                _lbl = str(r.get("Label","?"))[:25]
-                for lini, col in [("Line B","Tons B (ton)"),("Line G","Tons G (ton)"),("Line D","Tons D (ton)")]:
-                    _v = r.get(col, 0) or 0
-                    _ton_data.append({"Skenario": _lbl, "Lini": lini,
-                                      "Tonase (ton)": round(float(_v),1)})
-            _ton_df = pd.DataFrame(_ton_data)
-            fig_ton = px.bar(_ton_df, x="Skenario", y="Tonase (ton)", color="Lini",
-                barmode="group", height=280,
-                color_discrete_map={"Line B":"#071952","Line G":"#088395","Line D":"#37B7C3"})
-            fig_ton.update_layout(template="plotly_white", paper_bgcolor="#FFFFFF",
-                plot_bgcolor="#FFFFFF", margin=dict(l=0,r=0,t=8,b=60),
-                xaxis_tickangle=-30, legend=dict(orientation="h",y=-0.4))
+            _tb = float(sel_mrow.get("Tons B (ton)", sel_mrow.get("Tons B", 0)) or 0)
+            _tg = float(sel_mrow.get("Tons G (ton)", sel_mrow.get("Tons G", 0)) or 0)
+            _td = float(sel_mrow.get("Tons D (ton)", sel_mrow.get("Tons D", 0)) or 0)
+            _tot = _tb + _tg + _td
+            fig_ton = go.Figure()
+            for _li, _tv, _lc in zip(["Filling B","Filling G","Filling D"],
+                                      [_tb, _tg, _td],
+                                      ["#071952","#088395","#37B7C3"]):
+                fig_ton.add_trace(go.Bar(
+                    name=_li, x=[_li], y=[_tv],
+                    marker_color=_lc,
+                    text=[f"{_tv:,.0f} ton"], textposition="outside",
+                    textfont=dict(size=12, color="#071952"),
+                ))
+            fig_ton.update_layout(
+                template="plotly_white", paper_bgcolor="#FFFFFF", plot_bgcolor="#FFFFFF",
+                margin=dict(l=0, r=0, t=24, b=20), showlegend=False, height=260,
+                yaxis=dict(title="Tonase (ton)", gridcolor="#EBF4F6"),
+                xaxis=dict(title=""),
+                bargap=0.35,
+            )
             st.plotly_chart(fig_ton, use_container_width=True)
 
         # Insight berbasis data

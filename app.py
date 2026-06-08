@@ -216,8 +216,8 @@ _first   = _uname_d.split()[0].title() if _uname_d else _uname
 _greeting = "Hi, Admin!" if _uname.lower() == "admin" else f"Hi, {_first}!"
 
 sidebar_brand()
-MENUS = ["Analisis Demand", "Capacity Simulation", "Capacity Planning",
-         "Production Allocation", "Investment Catalog"]
+MENUS = ["Analisis Demand", "Simulasi Kapasitas", "Evaluasi Kapasitas",
+         "Alokasi Produksi", "Parameter Investasi"]
 with st.sidebar:
     st.markdown(
         f'<div style="color:#37B7C3;font-size:.86rem;font-weight:600;padding:0 0 10px 2px;">'
@@ -271,11 +271,11 @@ st.markdown("---")
 
 if page == "Analisis Demand":
     from views.demand_overview import render; render()
-elif page == "Capacity Simulation":
+elif page == "Simulasi Kapasitas":
     from views.capacity_simulation import render; render()
-elif page == "Capacity Planning":
+elif page == "Evaluasi Kapasitas":
     from views.capacity_planning import render; render()
-elif page == "Production Allocation":
+elif page == "Alokasi Produksi":
     from views.production_allocation import render; render()
 else:
     from views.investment_catalog import render; render()

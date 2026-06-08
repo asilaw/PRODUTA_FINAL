@@ -73,7 +73,7 @@ def _plot_outputs(result_df):
 
 def render():
     st.markdown(
-        '<div class="page-title">CAPACITY SIMULATION</div>',
+        '<div class="page-title">SIMULASI KAPASITAS</div>',
         unsafe_allow_html=True,
     )
     st.markdown(

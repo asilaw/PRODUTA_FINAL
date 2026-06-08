@@ -145,7 +145,7 @@ def render():
 
 
     # ── Header ────────────────────────────────────────────────────────────────────
-    st.markdown('<p class="page-title">Production Allocation</p>',unsafe_allow_html=True)
+    st.markdown('<p class="page-title">ALOKASI PRODUKSI</p>',unsafe_allow_html=True)
     st.caption("Pemetaan volume ke kapasitas lini dan analisis kelayakan finansial.")
 
     # ── Latar Belakang Skenario ────────────────────────────────────────────────────

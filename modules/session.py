@@ -90,7 +90,7 @@ def upload_widget(key: str, label: str, loader_fn, key_suffix: str = "",
                                 label_visibility="collapsed")
     if uploaded is not None:
         try:
-            df = loader_fn(uploaded.read())
+            df = loader_fn(uploaded)   # pass file object, bukan bytes
             set_(key, df)
             return df
         except Exception as e:

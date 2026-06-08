@@ -113,6 +113,28 @@ p, li, span, label { color: #071952; }
 .badge-infeasible { background:#c0392b; color:#fff; padding:4px 14px; border-radius:6px; font-weight:700; }
 .badge-maintain   { background:#1a7f4b; color:#fff; padding:3px 10px; border-radius:4px; font-weight:600; font-size:.82rem; }
 .badge-modify     { background:#e6a817; color:#fff; padding:3px 10px; border-radius:4px; font-weight:600; font-size:.82rem; }
+/* ── File uploader fix: readable in dark sidebar ─────────────────── */
+[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {
+  background: rgba(55,183,195,0.12) !important;
+  border: 1.5px dashed #37B7C3 !important;
+  border-radius: 6px !important;
+}
+[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] button {
+  color: #EBF4F6 !important;
+  border-color: #37B7C3 !important;
+  background: rgba(8,131,149,0.25) !important;
+}
+[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] span,
+[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] small,
+[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] p {
+  color: #EBF4F6 !important;
+}
+/* Main area file uploader */
+[data-testid="stFileUploaderDropzone"] {
+  background: rgba(55,183,195,0.06) !important;
+  border: 1.5px dashed #088395 !important;
+}
+[data-testid="stFileUploaderDropzone"] button { color: #071952 !important; }
 </style>
 """
 
