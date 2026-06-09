@@ -73,29 +73,26 @@ def render():
 
     # ── Halaman ────────────────────────────────────────────────────────────────
     st.markdown('<div class="page-title">PARAMETER INVESTASI</div>', unsafe_allow_html=True)
-    st.caption("Kelola katalog mesin, paket investasi, dan parameter finansial. "
-               "Semua perubahan langsung digunakan oleh menu Perencanaan Kapasitas dan Alokasi Produksi.")
+    st.caption("Kelola referensi teknis dan parameter finansial yang digunakan di seluruh analisis investasi.")
 
-    if FP_PATH.exists():
-        st.success(f"✓ Data dimuat dari: `{FP_PATH}` — edit di sini untuk override default.", icon=None)
-    else:
-        st.warning("File `data/Financial_Param.xlsx` tidak ditemukan. Menggunakan nilai default.")
+    if not FP_PATH.exists():
+        st.caption("Parameter finansial menggunakan nilai default. Perubahan di sini disimpan secara lokal.")
 
     cat      = load_catalog()
     machines = cat["machines"]
 
     tab_mesin, tab_paket, tab_capex, tab_opex, tab_param = st.tabs([
-        "⚙ Katalog Mesin",
-        "📦 Paket Investasi",
-        "🏗 Overhead CAPEX",
-        "💼 OPEX & Manpower",
-        "📊 Parameter Finansial",
+        "Katalog Mesin",
+        "Paket Investasi",
+        "Overhead CAPEX",
+        "OPEX & Manpower",
+        "Parameter Finansial",
     ])
 
     # ─── TAB 1: KATALOG MESIN ────────────────────────────────────────────────
     with tab_mesin:
-        st.markdown("#### Daftar Mesin")
-        st.caption("Harga dan spesifikasi mesin. Perubahan langsung dipakai di kalkulasi CAPEX paket investasi.")
+        st.markdown("**KATALOG MESIN**")
+        st.caption("Spesifikasi dan harga referensi komponen mesin.")
 
         # Filter per role
         all_roles = sorted({m.get("role", m.get("name","?")) for m in machines.values()})
@@ -125,7 +122,7 @@ def render():
                 with c3:
                     m["is_core"] = st.checkbox("Core", m.get("is_core", True), key=f"mic_{key}")
                     m["url"]     = st.text_input("URL Ref", m.get("url",""), key=f"mu_{key}")
-                    if st.button("🗑 Hapus", key=f"del_{key}", type="secondary"):
+                    if st.button("Hapus", key=f"del_{key}", type="secondary"):
                         _to_delete = key
 
         if _to_delete:
@@ -133,7 +130,7 @@ def render():
             save_catalog(cat); st.rerun()
 
         st.markdown("---")
-        with st.expander("➕ Tambah Mesin Baru"):
+        with st.expander("Tambah Mesin Baru"):
             na1, na2 = st.columns(2)
             with na1:
                 new_key   = st.text_input("ID (unik, lowercase_)", key="nk")
@@ -155,13 +152,13 @@ def render():
                     }
                     save_catalog(cat); st.success(f"Mesin '{new_full}' ditambahkan."); st.rerun()
 
-        if st.button("💾 Simpan Katalog Mesin", type="primary", key="save_mesin"):
+        if st.button("Simpan Katalog Mesin", type="primary", key="save_mesin"):
             save_catalog(cat); st.success("Katalog mesin disimpan.")
 
     # ─── TAB 2: PAKET INVESTASI ──────────────────────────────────────────────
     with tab_paket:
-        st.markdown("#### Paket Investasi")
-        st.caption("Setiap paket = kombinasi mesin + overhead. CAPEX total dihitung otomatis.")
+        st.markdown("**PAKET INVESTASI**")
+        st.caption("Konfigurasi kombinasi komponen mesin beserta estimasi CAPEX.")
 
         for pkg_key, pkg in cat["packages"].items():
             with st.expander(f"**{pkg.get('name', pkg_key)}**", expanded=True):
@@ -225,7 +222,7 @@ def render():
 
         # Tambah paket baru
         st.markdown("---")
-        with st.expander("➕ Tambah Paket Baru"):
+        with st.expander("Tambah Paket Baru"):
             np1, np2 = st.columns(2)
             with np1:
                 npkg_key  = st.text_input("ID Paket (unik, lowercase_)", key="npk")
@@ -241,13 +238,13 @@ def render():
                     }
                     save_catalog(cat); st.success(f"Paket '{npkg_name}' dibuat."); st.rerun()
 
-        if st.button("💾 Simpan Paket", type="primary", key="save_paket"):
+        if st.button("Simpan Paket", type="primary", key="save_paket"):
             save_catalog(cat); st.success("Paket investasi disimpan.")
 
     # ─── TAB 3: OVERHEAD CAPEX ───────────────────────────────────────────────
     with tab_capex:
-        st.markdown("#### Overhead CAPEX")
-        st.caption("Persentase overhead diterapkan ke total harga mesin untuk menghitung CAPEX total.")
+        st.markdown("**OVERHEAD CAPEX**")
+        st.caption("Komponen biaya tambahan di luar harga mesin.")
 
         overhead = cat.get("capex_overhead", OVERHEAD)
         st.markdown("**Overhead % dari total harga mesin:**")
@@ -271,13 +268,13 @@ def render():
         new_total = sum(new_overhead.values()) * 100
         st.info(f"Total overhead: **{new_total:.1f}%** dari harga mesin")
 
-        if st.button("💾 Simpan Overhead", type="primary", key="save_oh"):
+        if st.button("Simpan Overhead", type="primary", key="save_oh"):
             save_catalog(cat); st.success("Overhead CAPEX disimpan.")
 
     # ─── TAB 4: OPEX & MANPOWER ─────────────────────────────────────────────
     with tab_opex:
-        st.markdown("#### OPEX & Manpower")
-        st.caption("Biaya operasional tahunan untuk lini baru. Sumber: Pak Ardi FBMI & UMR Bekasi.")
+        st.markdown("**OPEX & MANPOWER**")
+        st.caption("Biaya operasional dan tenaga kerja tahunan untuk penambahan lini.")
 
         opex = cat.get("opex_manpower", {
             "operator_annual": ANNUAL_OPERATOR,
@@ -323,15 +320,13 @@ def render():
                 f"QC {fmt_rp(opex['qc_annual'])}")
         cat["opex_manpower"] = opex
 
-        if st.button("💾 Simpan OPEX", type="primary", key="save_opex"):
+        if st.button("Simpan OPEX", type="primary", key="save_opex"):
             save_catalog(cat); st.success("Parameter OPEX disimpan.")
 
     # ─── TAB 5: PARAMETER FINANSIAL ─────────────────────────────────────────
     with tab_param:
-        st.markdown("#### Parameter Finansial Global")
-        st.caption(
-            "Parameter ini digunakan di seluruh perhitungan kelayakan finansial. "
-            "Sumber referensi: model valuasi Fonterra/Lactalis Group.")
+        st.markdown("**PARAMETER FINANSIAL**")
+        st.caption("Parameter evaluasi kelayakan investasi yang berlaku di seluruh menu.")
 
         gp = cat.get("global_params", {k: v for k, v in DEFAULT_PARAMS.items()})
 
@@ -418,15 +413,15 @@ def render():
 | ROI/tahun | {result['roi_pct']:.1f}% |
 | Payback | {f"{result['payback_year']:.1f} tahun" if result['payback_year'] else "N/A"} |
 | FCF/tahun | {fmt_rp(result['annual_fcf'])} |
-| LAYAK | {"✅ Ya" if result['feasible'] else "❌ Tidak"} |
+| LAYAK | {" Ya" if result['feasible'] else " Tidak"} |
 """)
         cat["global_params"] = gp
-        if st.button("💾 Simpan Parameter Finansial", type="primary", key="save_param"):
+        if st.button("Simpan Parameter Finansial", type="primary", key="save_param"):
             save_catalog(cat); st.success("Parameter finansial disimpan.")
 
     # ── Simpan semua ──────────────────────────────────────────────────────────
     st.markdown("---")
-    if st.button("💾 SIMPAN SEMUA PERUBAHAN", type="primary", key="save_all"):
+    if st.button("Simpan Semua Perubahan", type="primary", key="save_all"):
         save_catalog(cat)
         set_("investment_catalog", cat)
         st.success("Semua perubahan disimpan ke katalog investasi.")

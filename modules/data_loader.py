@@ -48,6 +48,7 @@ _SIM_COL_MAP = {
     "Target Demand Ton":   "Target_Demand_Ton",
     "Planned Ton":         "Planned_Ton",
     "Tons Finished":       "Tons_Finished",
+    "Target Demand Ton":   "Target_Demand_Ton",
     "Planning Ratio (%)":  "Planning_Ratio",
     "Finished Ratio (%)":  "Finished_Ratio",
     "Unmet Demand Ton":    "Unmet_Demand",
@@ -163,6 +164,70 @@ def _detect_sep(text: str) -> str:
     if ";" in first_line:
         return ";"
     return ","
+
+
+def _parse_sim_v4(text: str) -> pd.DataFrame:
+    """
+    Parse format CSV baru Asil (Jun 2026): tab-separated, tanpa header.
+    Kolom (berdasarkan urutan):
+    [0] row_num, [1] label, [2] B_days, [3] B_hrs, [4] G_days, [5] G_hrs,
+    [6] D_days, [7] D_hrs, [8] batch_mode, [9] growth,
+    [10] avail_b, [11] avail_g, [12] avail_d,
+    [13] downtime_b, [14] downtime_g, [15] downtime_d,
+    [16] target_demand, [17] planned_ton, [18] tons_finished,
+    [19] planning_ratio, [20] finished_ratio, [21] unmet_demand,
+    [22] tons_b, [23] tons_g, [24] tons_d,
+    [25] util_b, [26] util_g, [27] util_d,
+    ...optional...
+    [-2] fis_score, [-1] decision
+    """
+    import io as _io
+    lines = [l for l in text.strip().split("\n") if l.strip()]
+    rows = []
+    for line in lines:
+        parts = line.split("\t")
+        if len(parts) < 10:
+            continue
+        def _g(i, d=0.0):
+            try: return float(parts[i]) if i < len(parts) and parts[i].strip() else d
+            except: return d
+        def _s(i, d=""):
+            return parts[i].strip() if i < len(parts) else d
+        rows.append({
+            "Scenario_ID":       _s(1),  # label as scenario ID
+            "Scenario":          _s(1),
+            "B_Days":            _g(2, 7), "B_Hours":  _g(3, 24),
+            "G_Days":            _g(4, 7), "G_Hours":  _g(5, 24),
+            "D_Days":            _g(6, 7), "D_Hours":  _g(7, 24),
+            "Batch_Mode":        _s(8),
+            "Growth":            _g(9, 0),
+            "Availability_B":    _g(10, 100), "Availability_G": _g(11, 100),
+            "Availability_D":    _g(12, 100),
+            "Downtime_B":        _g(13, 0), "Downtime_G": _g(14, 0),
+            "Downtime_D":        _g(15, 0),
+            "Target_Demand_Ton": _g(16, 0),
+            "Planned_Ton":       _g(17, 0),
+            "Tons_Finished":     _g(18, 0),
+            "Planning_Ratio":    _g(19, 100),
+            "Finished_Ratio":    _g(20, 100),
+            "Unmet_Demand":      _g(21, 0),
+            "Tons_B":            _g(22, 0), "Tons_G": _g(23, 0), "Tons_D": _g(24, 0),
+            "Util_Filling_B":    _g(25, 0), "Util_Filling_G": _g(26, 0),
+            "Util_Filling_D":    _g(27, 0),
+            "Capacity_Status":   "",
+            "Planner_Status":    "",
+            "Bottleneck_Area":   "",
+            "_row_num":          _g(0, 0),
+        })
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    # Deduplicate: jika semua baris punya label yang sama, ini 1 skenario saja
+    # Kembalikan 1 baris per skenario unik (unique by label)
+    df["_label_key"] = df["Scenario_ID"].astype(str).str.strip()
+    df = df.drop_duplicates(subset=["_label_key"]).drop(columns=["_label_key", "_row_num"])
+    df = df.reset_index(drop=True)
+    return df
 
 
 def _read_flexible(source, encoding="utf-8") -> pd.DataFrame:
@@ -400,20 +465,20 @@ def _parse_sim_new_format(content: str) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def load_simulation(uploaded_file=None) -> pd.DataFrame:
+def load_simulation(_uploaded_file=None) -> pd.DataFrame:
     """Load simulation — supports new per-line format (Scenario_Code, B_Days, ...)
     and old format (Scenario_ID, Days_Per_Week, ...).  Produces unified output."""
     # ── Read raw text first (most reliable for new format) ───────────────────
     raw_text = ""
-    if uploaded_file is not None:
+    if _uploaded_file is not None:
         try:
-            if hasattr(uploaded_file, "read"):
-                raw_bytes = uploaded_file.read()
+            if hasattr(_uploaded_file, "read"):
+                raw_bytes = _uploaded_file.read()
                 raw_text  = raw_bytes.decode("utf-8", errors="replace")
-                if hasattr(uploaded_file, "seek"):
-                    uploaded_file.seek(0)
-            elif isinstance(uploaded_file, (str, Path)):
-                with open(uploaded_file, "rb") as fh:
+                if hasattr(_uploaded_file, "seek"):
+                    _uploaded_file.seek(0)
+            elif isinstance(_uploaded_file, (str, Path)):
+                with open(_uploaded_file, "rb") as fh:
                     raw_text = fh.read().decode("utf-8", errors="replace")
         except Exception:
             pass
@@ -430,15 +495,28 @@ def load_simulation(uploaded_file=None) -> pd.DataFrame:
     if not raw_text.strip():
         return pd.DataFrame()
 
-    # ── Format detection: v3 (Asil final) > v2 (Asil prev) > v1 (old) ────────
+    # ── Format detection: v4 > v3 > v2 > v1 ────────────────────────────────────
     first_line = raw_text.split("\n")[0].lower()
-    is_v3 = "line b days" in first_line or (
+    # v4: tab-separated, NO header, first column = row number (integer)
+    # Format baru Asil: "1\tB:7D/24H · G:7D/24H · D:7D/24H\t7\t24\t..."
+    _first_col = first_line.split("\t")[0].strip() if "\t" in first_line else ""
+    is_v4 = (
+        "\t" in first_line
+        and _first_col.isdigit()
+        and ("7d/24h" in first_line or "d/24h" in first_line or "7d/" in first_line)
+        and "line b days" not in first_line
+    )
+    is_v3 = not is_v4 and ("line b days" in first_line or (
         "scenario" in first_line and "batch mode" in first_line
         and "scenario_code" not in first_line
-    )
-    is_v2 = "Scenario_Code" in raw_text and not is_v3
+    ))
+    is_v2 = not is_v4 and "Scenario_Code" in raw_text and not is_v3
 
-    if is_v3:
+    if is_v4:
+        # v4: tab-separated, no header, row-number first col (Asil new format Jun 2026)
+        df = _parse_sim_v4(raw_text)
+        new_fmt = not df.empty
+    elif is_v3:
         # v3: comma-separated, new column names with spaces
         df = _parse_sim_v3(raw_text)      # returns normalized DataFrame
         new_fmt = not df.empty
@@ -449,9 +527,9 @@ def load_simulation(uploaded_file=None) -> pd.DataFrame:
         # v1 old format
         new_fmt = False
         try:
-            if uploaded_file is not None and hasattr(uploaded_file, "seek"):
-                uploaded_file.seek(0)
-            df = _read_flexible(uploaded_file or (DATA_DIR / "simulation.csv"))
+            if _uploaded_file is not None and hasattr(_uploaded_file, "seek"):
+                _uploaded_file.seek(0)
+            df = _read_flexible(_uploaded_file or (DATA_DIR / "simulation.csv"))
         except Exception:
             df = pd.DataFrame()
 

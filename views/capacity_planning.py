@@ -6,7 +6,7 @@ import plotly.express as px
 from pathlib import Path
 from modules.session import get, set_, get_state, set_state
 from modules.data_loader import load_simulation, load_master_sku
-from modules.fis_engine import compute_fis
+from modules.fis_engine import compute_fis, fis_severity_label, fis_severity_color
 from modules.capacity_model import estimate_upgrade
 from modules.financial_calc import compute_financial, capex_multiline, capex_new_line, capex_stickpack_line, DEFAULT_PARAMS, MACHINES
 
@@ -24,9 +24,10 @@ def render():
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from modules.data_loader    import load_simulation
     from modules.session        import get, upload_widget
-    from modules.fis_engine     import compute_fis
+    from modules.fis_engine     import compute_fis, fis_severity_label, fis_severity_color
     from modules.capacity_model import (diagnose_bottleneck, estimate_upgrade,
                                         recommend_options)
+    from modules.decision_model import load_model, train_model, evaluate_scenarios
     from modules.financial_calc import (compute_financial, monte_carlo_npv,
                                         CAPEX_FN, DEFAULT_PARAMS, MACHINES, fmt_rp)
 
@@ -74,39 +75,61 @@ def render():
 
 
     # ── Sidebar ───────────────────────────────────────────────────────────────────
+    # ── ML Model: load atau train (harus sebelum sidebar) ───────────────────────
+    _ml_model, _ml_meta = load_model()
+
     with st.sidebar:
         st.markdown("### Data")
         # ── Sumber Data ────────────────────────────────────────────
         st.markdown('<div style="color:#37B7C3;font-size:.78rem;font-weight:700;'
                     'letter-spacing:.06em;margin-bottom:6px;">SUMBER DATA</div>',
                     unsafe_allow_html=True)
-        _des_check = get_state("simulation_result")
-        _has_des   = isinstance(_des_check, pd.DataFrame) and not _des_check.empty
-        if _has_des:
-            n_scen = len(_des_check)
-            st.markdown(
-                f'<div style="background:rgba(55,183,195,0.15);border:1px solid #37B7C3;'
-                f'border-radius:6px;padding:8px 10px;font-size:.8rem;color:#EBF4F6;'
-                f'margin-bottom:6px;">Hasil DES Simulation '
-                f'<b style="color:#37B7C3;">{n_scen} skenario</b></div>',
-                unsafe_allow_html=True,
-            )
-            if st.button("Gunakan File Upload",
-                         key="clear_des_cp",
-                         help="Beralih ke mode upload file CSV manual"):
+        # Upload widget selalu tampil — user bisa override kapan saja
+        st.markdown('<div style="font-size:.78rem;color:#EBF4F6;margin-bottom:4px;">'
+                    'Upload file CSV hasil simulasi DES:</div>',
+                    unsafe_allow_html=True)
+        _new_file = upload_widget("simulation", "Hasil Simulasi", load_simulation)
+
+        # Validasi: data harus punya kolom utilisasi yang benar
+        def _valid_sim(df):
+            if not isinstance(df, pd.DataFrame) or df.empty:
+                return False
+            # Harus punya minimal 1 kolom utilisasi dengan nilai non-zero
+            for col in ["Util_Filling_B","Util_Filling_G","Util_Filling_D"]:
+                if col in df.columns and (df[col] > 0).any():
+                    return True
+            return False
+
+        if _valid_sim(_new_file):
+            set_state("simulation_result", _new_file)
+        elif not _valid_sim(_new_file):
+            # Cek apakah session state punya data valid
+            _ses = get_state("simulation_result")
+            if _valid_sim(_ses):
+                st.caption(f"Data aktif: {len(_ses)} skenario dari sesi ini.")
+            else:
+                # Clear invalid cached data
                 set_state("simulation_result", pd.DataFrame())
-                set_("simulation", pd.DataFrame())
-                from pathlib import Path as _P
-                _P("data/cache/simulation.pkl").unlink(missing_ok=True)
-                st.rerun()
-        else:
-            st.markdown('<div style="font-size:.78rem;color:#EBF4F6;margin-bottom:4px;">'
-                        'Upload CSV dari menu Capacity Simulation:</div>',
-                        unsafe_allow_html=True)
-            upload_widget("simulation","Hasil Simulasi",load_simulation)
-            _uploaded = get("simulation")
-            if isinstance(_uploaded, pd.DataFrame) and not _uploaded.empty:
-                set_state("simulation_result", _uploaded)
+
+        if st.button("Hapus Cache Simulasi", key="clear_des_cp",
+                     help="Kosongkan data simulasi yang tersimpan"):
+            set_state("simulation_result", pd.DataFrame())
+            set_("simulation", pd.DataFrame())
+            from pathlib import Path as _P
+            for _pkl in ["data/cache/simulation.pkl","data/simulation.pkl"]:
+                _P(_pkl).unlink(missing_ok=True)
+            st.rerun()
+        st.markdown("---")
+        # Model info + retrain button
+        if _ml_meta:
+            st.markdown(
+                f'<div style="font-size:.72rem;color:#37B7C3;">'                f'Model aktif: CV F1 {_ml_meta.get("cv_f1",0)*100:.1f}% '                f'| Dilatih: {_ml_meta.get("trained_at","-")}</div>',
+                unsafe_allow_html=True)
+        if st.button("Latih Ulang Model", key="retrain_ml",
+            help="Reset dan latih ulang model dari data awal"):
+            from pathlib import Path as _P
+            _P("models/capacity_classifier.pkl").unlink(missing_ok=True)
+            st.rerun()
         st.markdown("---")
         st.markdown("### Parameter Evaluasi")
         util_warn=st.slider("Batas Utilisasi (%)",60,95,85,5,
@@ -156,18 +179,43 @@ def render():
     st.markdown('<div class="page-title">EVALUASI KAPASITAS</div>', unsafe_allow_html=True)
     st.caption("Evaluasi skenario kapasitas produksi — skoring FIS, keputusan investasi, dan analisis kelayakan finansial.")
 
+    # Jika model belum ada, tampilkan tombol inisialisasi
+    if _ml_model is None:
+        st.info("Model evaluasi kapasitas belum tersedia.")
+        if st.button("Inisialisasi Model Evaluasi", type="primary", key="init_ml_main"):
+            _pb = st.progress(0.0, text="Menginisialisasi...")
+            def _upd(v, msg): _pb.progress(v, text=msg)
+            _ml_model, _ml_meta = train_model(_upd)
+            st.success(f"Model siap — Akurasi CV F1: {_ml_meta.get('cv_f1',0)*100:.1f}%")
+            st.rerun()
+        st.stop()
+
     # ── Ambil data simulasi: prioritas session DES, fallback upload manual ──────
     from modules.data_loader import _normalize_sim_columns as _ncols
 
-    _des_result = get_state("simulation_result")
-    if isinstance(_des_result, pd.DataFrame) and not _des_result.empty:
-        sim_df = _ncols(_des_result.copy())
+    # VALIDASI: data sim harus punya kolom utilisasi non-zero
+    # (bukan data DES per-produk yang tidak punya kolom ini)
+    def _valid_sim_df(df):
+        if not isinstance(df, pd.DataFrame) or df.empty: return False
+        for col in ["Util_Filling_B","Util_Filling_G","Util_Filling_D"]:
+            if col in df.columns and (pd.to_numeric(df[col], errors="coerce").fillna(0) > 0).any():
+                return True
+        return False
+
+    _des_result  = get_state("simulation_result")
+    _norm_des    = _ncols(_des_result.copy()) if isinstance(_des_result, pd.DataFrame) and not _des_result.empty else pd.DataFrame()
+    _upload_res  = get("simulation")
+    _norm_upl    = _ncols(_upload_res.copy()) if isinstance(_upload_res, pd.DataFrame) and not _upload_res.empty else pd.DataFrame()
+
+    if _valid_sim_df(_norm_des):
+        sim_df = _norm_des
+    elif _valid_sim_df(_norm_upl):
+        sim_df = _norm_upl
+        set_state("simulation_result", _norm_upl)
     else:
-        sim_df = get("simulation")
-        if not isinstance(sim_df, pd.DataFrame):
-            sim_df = pd.DataFrame()
-        if not sim_df.empty:
-            sim_df = _ncols(sim_df)
+        sim_df = pd.DataFrame()
+        if not _norm_des.empty:
+            set_state("simulation_result", pd.DataFrame())
 
     # Tambah kolom backward-compat yang mungkin tidak ada di output Asil
     if not sim_df.empty:
@@ -192,6 +240,29 @@ def render():
     if sim_clean.empty:
         st.error("Tidak ada skenario valid di hasil simulasi."); st.stop()
 
+    # Dedup: jika banyak baris identik (format v4 atau bug DES), collapse ke unik
+    _scen_col = next((c for c in ["Scenario_ID","Scenario","Label"] if c in sim_clean.columns), None)
+    if _scen_col and len(sim_clean) > 1:
+        _n_before = len(sim_clean)
+        if sim_clean[_scen_col].duplicated().any():
+            sim_clean = sim_clean.drop_duplicates(subset=[_scen_col]).reset_index(drop=True)
+            st.warning(
+                f"CSV berisi {_n_before} baris dengan konfigurasi identik — "
+                f"ditampilkan sebagai {len(sim_clean)} skenario unik."
+            )
+
+    # Validasi demand: peringatkan jika Target Demand semua 0
+    _tgt_col = next((c for c in ["Target_Demand_Ton","Target Demand Ton"] if c in sim_clean.columns), None)
+    if _tgt_col:
+        _all_zero = (pd.to_numeric(sim_clean[_tgt_col], errors="coerce").fillna(0) == 0).all()
+        if _all_zero:
+            st.error(
+                "Semua skenario memiliki Target Demand = 0 ton. "
+                "Pastikan DES dijalankan dengan data forecast demand sebagai input — "
+                "utilisasi dan tonnase tidak dapat dievaluasi tanpa data demand yang valid."
+            )
+            st.stop()
+
     # ═══ SECTION 1: EVALUASI & RANKING ═══════════════════════════════════════════
     st.markdown('<div class="section-title">Evaluasi Skenario</div>',unsafe_allow_html=True)
 
@@ -204,19 +275,24 @@ def render():
         eff_hrs=eff_d*wrk_h
         max_q=float(str(row.get("Max_Q_DayH","0")).replace(",","") or 0)
         score=float(compute_fis(umx,ur,fr))
-        # Primary gate: use Capacity_Status from simulation (Asil formula #30)
-        # "Unmet <= 0.05 → KAPASITAS MENCUKUPI → MAINTAIN"
-        cap_status_raw = str(row.get("Capacity_Status","")).strip().upper()
-        if cap_status_raw and "TIDAK MENCUKUPI" in cap_status_raw:
-            level = "MODIFY"     # demand tidak terpenuhi
-        elif cap_status_raw and "MENCUKUPI" in cap_status_raw and "TIDAK" not in cap_status_raw:
-            # Demand terpenuhi — tapi cek utilisasi
-            # Utilisasi tinggi = risiko kapasitas = MODIFY (preventif)
-            level = "MODIFY" if umx >= util_warn else "MAINTAIN"
-        elif unm<=0 and fr>=99.95:
-            level = "MAINTAIN" if umx < util_warn else "MODIFY"
+        # Keputusan berbasis ML model (trained Random Forest):
+        _ml_res = evaluate_scenarios([{
+            "util_b": ub, "util_g": ug, "util_d": ud,
+            "unmet_ratio": ur, "finished_ratio": fr
+        }], _ml_model)
+        if _ml_res:
+            level      = _ml_res[0]["decision"]
+            _conf      = _ml_res[0]["confidence"]
+            _top_feat  = _ml_res[0]["feature_contributions"]
         else:
-            level = "MAINTAIN" if score<maintain_thresh else "MODIFY"
+            # fallback FIS jika model tidak tersedia
+            _conf, _top_feat = 0.0, []
+            if unm > 0.05: level = "MODIFY"
+            elif umx >= 92.0: level = "MODIFY"
+            elif score >= 2.0: level = "MODIFY"
+            else: level = "MAINTAIN"
+        # FIS severity untuk konteks (bukan penentu level)
+        severity = fis_severity_label(score)
         # Per-line schedule (new format) or fall back to global (old format)
         _b_d=float(str(row.get("B_Days") or row.get("Days_Per_Week") or 7).replace(",","") or 7)
         _b_h=float(str(row.get("B_Hours") or row.get("Working_Hours") or 24).replace(",","") or 24)
@@ -241,9 +317,9 @@ def render():
         _down_b = float(str(row.get("Downtime_B",row.get("Downtime B",0))).replace(",","") or 0)
         _down_g = float(str(row.get("Downtime_G",row.get("Downtime G",0))).replace(",","") or 0)
         _down_d = float(str(row.get("Downtime_D",row.get("Downtime D",0))).replace(",","") or 0)
-        _avail_b = float(str(row.get("Availability_B",row.get("Availability B (%)",100))).replace(",","") or 100)
-        _avail_g = float(str(row.get("Availability_G",row.get("Availability G (%)",100))).replace(",","") or 100)
-        _avail_d = float(str(row.get("Availability_D",row.get("Availability D (%)",100))).replace(",","") or 100)
+        _avail_b = float(str(row.get("Availability_B",row.get(100))).replace(",","") or 100)
+        _avail_g = float(str(row.get("Availability_G",row.get(100))).replace(",","") or 100)
+        _avail_d = float(str(row.get("Availability_D",row.get(100))).replace(",","") or 100)
         _tons_b = _s(row,"Tons_B"); _tons_g = _s(row,"Tons_G"); _tons_d = _s(row,"Tons_D")
         _tgt_ton = max(_s(row,"Target_Demand_Ton"),1)
         results.append({
@@ -263,7 +339,9 @@ def render():
             "Setup B (mnt)":int(_setup_b),"Setup G (mnt)":int(_setup_g),"Setup D (mnt)":int(_setup_d),
             "Bottleneck":_btn,"Status Kapasitas":_cap_st,"Status Planner":_plan_st,
             "Total Produksi (ton)":round(_tons_fin,1),
-            "Skor FIS":   round(score,3),"Keputusan":level,
+            "Skor FIS":   round(score,3),"Keputusan":level,"Severity":severity,
+            "Confidence (%)": round(_conf,1),
+            "Faktor Utama": _top_feat[0][0] if _top_feat else "—",
             # Backward-compat aliases
             "Util B":round(ub,1),"Util G":round(ug,1),"Util D":round(ud,1),
             "Finished %":round(fr,1),"Unmet %":round(ur,1),"Util Max":round(umx,1),
@@ -349,20 +427,19 @@ def render():
         _T5_COLS = [
             "Rank","Label",
             "Hari B","Jam B","Hari G","Jam G","Hari D","Jam D",
-            "Batch Mode","Growth",
-            "Downtime B","Downtime G","Downtime D",
+            "Batch Mode",
             "Tons B (ton)","Tons G (ton)","Tons D (ton)",
             "Selesai (%)","Unmet (%)",
             "Util B (%)","Util G (%)","Util D (%)",
-            "Bottleneck","Status Kapasitas","Skor FIS","Keputusan",
+            "Bottleneck","Status Kapasitas","Skor FIS","Confidence (%)","Keputusan",
         ]
         def _dec_color(v):
             if v=="MAINTAIN": return "color:#1a7f4b;font-weight:700"
             if v=="MODIFY":   return "color:#d29922;font-weight:700"
             return "color:#071952"
         t5_show = rank_df.head(5)[[c for c in _T5_COLS if c in rank_df.columns]].copy()
-        for nc in [c for c in t5_show.columns if "(%" in c or "ton" in c.lower()]:
-            t5_show[nc] = pd.to_numeric(t5_show[nc], errors="coerce").round(1)
+        for nc in t5_show.select_dtypes(include="number").columns:
+            t5_show[nc] = pd.to_numeric(t5_show[nc], errors="coerce").round(2)
         _dc = ["Keputusan"] if "Keputusan" in t5_show.columns else []
         st.dataframe(
             t5_show.style.map(_dec_color, subset=_dc) if _dc else t5_show,
@@ -384,59 +461,57 @@ def render():
             "Skor FIS","Keputusan",
         ]
         all_show = rank_df[[c for c in _ALL_COLS if c in rank_df.columns]].copy()
+        for nc in all_show.select_dtypes(include="number").columns:
+            all_show[nc] = pd.to_numeric(all_show[nc], errors="coerce").round(2)
         _dc2 = ["Keputusan"] if "Keputusan" in all_show.columns else []
         st.dataframe(
             all_show.style.map(_dec_color, subset=_dc2) if _dc2 else all_show,
             use_container_width=True, hide_index=True,
         )
         st.caption(
-            f"MODIFY: kapasitas tidak mencukupi target demand, ATAU utilisasi ≥ {util_warn}% "
-            "(risiko kapasitas meski demand saat ini terpenuhi). "
-            "MAINTAIN: kapasitas cukup dan utilisasi aman."
+            "Keputusan dihasilkan oleh model Random Forest yang terlatih dari data simulasi DES. "
+            "MAINTAIN: kondisi kapasitas dinilai aman. MODIFY: diperlukan evaluasi investasi lebih lanjut."
         )
 
     st.markdown("---")
-    if n_mod==0:
-        st.success("Semua skenario MAINTAIN — kapasitas produksi mencukupi untuk seluruh proyeksi demand.")
-
-        # Tampilkan utilisasi & tonase per lini untuk skenario terbaik
-        best_row = rank_df.iloc[0]
-        st.markdown(
-            f'<div class="section-title">DETAIL SKENARIO TERBAIK — {best_row.get("Label","")}</div>',
-            unsafe_allow_html=True,
-        )
-
-        # Selectbox pilih skenario
+    if overall == "MAINTAIN":
+        # Selectbox pilih skenario (tampil dulu)
         _scen_labels = rank_df["Label"].tolist()
         _sel_idx = st.selectbox(
-            "Pilih skenario untuk dilihat detailnya:",
+            "Detail skenario:",
             range(len(_scen_labels)),
-            format_func=lambda i: f"#{i+1} — {_scen_labels[i]}",
+            format_func=lambda i: (
+                f"#{i+1} — {_scen_labels[i]}  "
+                f"[{rank_df.iloc[i].get('Keputusan','?')} | "
+                f"Keyakinan model: {rank_df.iloc[i].get('Confidence (%)','—')}%]"
+            ),
             index=0, key="maintain_sel_scen",
         )
         sel_mrow = rank_df.iloc[_sel_idx]
-
-        # KPI utilisasi skenario terpilih
-        m1,m2,m3,m4 = st.columns(4)
-        for col_obj, lbl, val, warn in [
-            (m1, "UTIL LINE B",
-             f"{float(sel_mrow.get('Util B (%)', sel_mrow.get('Util B',0))):.1f}%",
-             float(sel_mrow.get('Util B (%)', sel_mrow.get('Util B',0))) >= util_warn),
-            (m2, "UTIL LINE G",
-             f"{float(sel_mrow.get('Util G (%)', sel_mrow.get('Util G',0))):.1f}%",
-             float(sel_mrow.get('Util G (%)', sel_mrow.get('Util G',0))) >= util_warn),
-            (m3, "UTIL LINE D",
-             f"{float(sel_mrow.get('Util D (%)', sel_mrow.get('Util D',0))):.1f}%",
-             float(sel_mrow.get('Util D (%)', sel_mrow.get('Util D',0))) >= util_warn),
-            (m4, "KAPASITAS", str(sel_mrow.get("Status Kapasitas","Mencukupi")), False),
-        ]:
-            clr = "#d29922" if warn else "#1a7f4b"
-            col_obj.markdown(
-                f'<div class="kpi-box" style="border-left-color:{clr};">'
-                f'<div class="kpi-label">{lbl}</div>'
-                f'<div class="kpi-value" style="color:{clr};">{val}</div></div>',
-                unsafe_allow_html=True,
-            )
+        _sel_decision  = str(sel_mrow.get("Keputusan","MAINTAIN"))
+        _sel_conf      = float(sel_mrow.get("Confidence (%)", 0))
+        _sel_util      = float(sel_mrow.get("Util Max (%)", 0))
+        _sel_headroom  = round(100 - _sel_util, 1)
+        _sel_btn       = str(sel_mrow.get("Bottleneck","—"))
+        _sel_faktor    = str(sel_mrow.get("Faktor Utama","—"))
+        _sel_cap_status = str(sel_mrow.get("Status Kapasitas","—"))
+        _banner_clr = "#1a7f4b" if _sel_decision == "MAINTAIN" else "#d29922"
+        _banner_lbl = "KONDISI LAYAK" if _sel_decision == "MAINTAIN" else "DIPERLUKAN EVALUASI LEBIH LANJUT"
+        st.markdown(
+            f'<div style="border-left:5px solid {_banner_clr};background:#F8FDFB;'
+            f'border-radius:6px;padding:14px 20px;margin-bottom:4px;">'
+            f'<div style="font-size:0.69rem;color:#8b949e;letter-spacing:.1em;font-weight:700;margin-bottom:4px;">'
+            f'KEPUTUSAN MODEL — {_sel_decision}</div>'
+            f'<div style="font-size:1.15rem;font-weight:800;color:{_banner_clr};margin-bottom:6px;">'
+            f'{_banner_lbl}</div>'
+            f'<div style="font-size:0.8rem;color:#071952;">'
+            f'Utilisasi tertinggi <b>{_sel_util:.1f}%</b> &nbsp;|&nbsp; '
+            f'Headroom <b>{_sel_headroom:.1f}%</b> &nbsp;|&nbsp; '
+            f'Bottleneck: <b>{_sel_btn}</b> &nbsp;|&nbsp; {_sel_cap_status}</div>'
+            f'<div style="font-size:0.74rem;color:#8b949e;margin-top:4px;">'
+            f'Keyakinan model: {_sel_conf:.1f}% &nbsp;—&nbsp; Faktor dominan: {_sel_faktor}</div>'
+            f'</div>',
+            unsafe_allow_html=True)
 
         # Grafik utilisasi dan tonase — mengikuti skenario yang dipilih
         # Overview: semua skenario; skenario terpilih di-highlight
@@ -495,22 +570,8 @@ def render():
             )
             st.plotly_chart(fig_ton, use_container_width=True)
 
-        # Insight berbasis data
-        _util_cols = [c for c in ["Util B (%)","Util G (%)","Util D (%)"] if c in rank_df.columns]
-        _avg_util   = float(rank_df[_util_cols].mean().mean()) if _util_cols else 0
-        _max_util   = float(rank_df["Util Max (%)"].max()) if "Util Max (%)" in rank_df.columns else _avg_util
-        _headroom   = round(100 - _max_util, 1)
-        _btn_name   = str(best_row.get("Bottleneck","Filling D"))
-        st.markdown(
-            f'<div class="note-box" style="margin-top:16px;">'
-            f'<b>Catatan:</b> Utilisasi maksimum pada skenario terbaik adalah <b>{_max_util:.1f}%</b> '
-            f'dengan headroom tersisa <b>{_headroom:.1f}%</b>. Bottleneck konsisten di <b>{_btn_name}</b>. '
-            f'Jika proyeksi demand meningkat signifikan di atas baseline, '
-            f'evaluasi kapasitas perlu dilakukan kembali sebelum utilisasi melebihi batas {util_warn}%.'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-        st.stop()
+        if n_mod == 0:
+            st.stop()   # semua MAINTAIN: tidak ada DIAGNOSA yang perlu ditampilkan
 
     # ═══ SECTION 2: DIAGNOSA & OPSI ══════════════════════════════════════════════
     st.markdown('<div class="section-title">Diagnosa Bottleneck & Rekomendasi</div>',unsafe_allow_html=True)

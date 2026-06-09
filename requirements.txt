@@ -12,3 +12,4 @@ statsmodels>=0.14.0
 # Forecasting (opsional tapi disarankan)
 prophet>=1.1.5
 optuna>=3.0.0
+scikit-learn>=1.3.0

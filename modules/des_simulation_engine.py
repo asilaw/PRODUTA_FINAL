@@ -29,7 +29,7 @@ TAHUN_SIMULASI = 2026
 HORIZON_HARI = 365
 
 DEFAULT_MAX_SCENARIOS = 100
-DEFAULT_CANDIDATE_WINDOW = 250
+DEFAULT_CANDIDATE_WINDOW = 60
 DEFAULT_PLANNED_PREVIEW_ROWS = 5000
 
 REQUIRED_CONCEPTS = [
@@ -283,7 +283,7 @@ def make_growth_options(mode="checklist", checklist=None, gmin=0, gmax=10, step=
     return checklist or [0]
 
 
-def generate_scenarios(b_days_options, b_hours_options, g_days_options, g_hours_options, d_days_options, d_hours_options, batch_options, growth_percent_options, max_scenarios=DEFAULT_MAX_SCENARIOS, b_availability=100, g_availability=100, d_availability=100, b_downtime=0, g_downtime=0, d_downtime=0):
+def generate_scenarios(b_days_options, b_hours_options, g_days_options, g_hours_options, d_days_options, d_hours_options, batch_options, growth_percent_options, max_scenarios=DEFAULT_MAX_SCENARIOS, b_downtime=0, g_downtime=0, d_downtime=0):
     growth_options = [g / 100 for g in growth_percent_options]
     combos_iter = itertools.product(b_days_options, b_hours_options, g_days_options, g_hours_options, d_days_options, d_hours_options, batch_options, growth_options)
     rows = []
@@ -299,7 +299,6 @@ def generate_scenarios(b_days_options, b_hours_options, g_days_options, g_hours_
             "Line G Days": int(g_days), "Line G Hours": float(g_hours),
             "Line D Days": int(d_days), "Line D Hours": float(d_hours),
             "Batch Mode": batch_mode, "Batch Limit per Day": int(batch_limit), "Growth": float(growth),
-            "Line B Availability (%)": float(b_availability), "Line G Availability (%)": float(g_availability), "Line D Availability (%)": float(d_availability),
             "Line B Downtime Days/Month": int(b_downtime), "Line G Downtime Days/Month": int(g_downtime), "Line D Downtime Days/Month": int(d_downtime),
         })
     return pd.DataFrame(rows)
@@ -341,11 +340,12 @@ def calc_setup(line_state, job):
 
 
 def get_line_calendar(scenario, line):
+    """Returns (days, hours, availability=1.0, downtime). Availability dihapus, selalu 1.0."""
     if line == "B":
-        return int(scenario["Line B Days"]), float(scenario["Line B Hours"]), float(scenario.get("Line B Availability (%)", 100)) / 100, int(scenario.get("Line B Downtime Days/Month", 0))
+        return int(scenario["Line B Days"]), float(scenario["Line B Hours"]), 1.0, int(scenario.get("Line B Downtime Days/Month", 0))
     if line == "G":
-        return int(scenario["Line G Days"]), float(scenario["Line G Hours"]), float(scenario.get("Line G Availability (%)", 100)) / 100, int(scenario.get("Line G Downtime Days/Month", 0))
-    return int(scenario["Line D Days"]), float(scenario["Line D Hours"]), float(scenario.get("Line D Availability (%)", 100)) / 100, int(scenario.get("Line D Downtime Days/Month", 0))
+        return int(scenario["Line G Days"]), float(scenario["Line G Hours"]), 1.0, int(scenario.get("Line G Downtime Days/Month", 0))
+    return int(scenario["Line D Days"]), float(scenario["Line D Hours"]), 1.0, int(scenario.get("Line D Downtime Days/Month", 0))
 
 
 def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_window=DEFAULT_CANDIDATE_WINDOW):
@@ -358,33 +358,65 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
     if len(jobs_df) == 0:
         return {}, pd.DataFrame()
     unscheduled = jobs_df.to_dict("records")
-    downtime_sets = {"B": make_monthly_downtime_set(scenario.get("Line B Downtime Days/Month", 0)), "G": make_monthly_downtime_set(scenario.get("Line G Downtime Days/Month", 0)), "D": make_monthly_downtime_set(scenario.get("Line D Downtime Days/Month", 0))}
-    line_state = {line: {"used_today": 0, "processing": 0, "setup": 0, "tons": 0, "last_sku": None, "last_port": None, "last_allergen": 0, "last_color": None} for line in ["B", "G", "D"]}
+    downtime_sets = {
+        "B": make_monthly_downtime_set(scenario.get("Line B Downtime Days/Month", 0)),
+        "G": make_monthly_downtime_set(scenario.get("Line G Downtime Days/Month", 0)),
+        "D": make_monthly_downtime_set(scenario.get("Line D Downtime Days/Month", 0)),
+    }
+
+    # ── OPTIMIZATION: Precompute once per scenario ─────────────────────────────
+    # 1. Line calendar (days, hours, cap_mins) — tidak berubah dalam scenario
+    _lc = {}
+    for _ln in ["B", "G", "D"]:
+        _days, _hrs, _avail, _ = get_line_calendar(scenario, _ln)
+        _lc[_ln] = {"days": _days, "hours": _hrs, "cap_mins": _hrs * 60.0}
+
+    # 2. Working days set per line — O(1) lookup di inner loop
+    _wd = {
+        _ln: frozenset(
+            d for d in range(1, HORIZON_HARI + 1)
+            if is_line_working(d, _lc[_ln]["days"], holiday_day_set, downtime_sets[_ln])
+        )
+        for _ln in ["B", "G", "D"]
+    }
+
+    line_state = {line: {"used_today": 0, "processing": 0, "setup": 0, "tons": 0,
+                         "last_sku": None, "last_port": None, "last_allergen": 0, "last_color": None}
+                  for line in ["B", "G", "D"]}
     planned_jobs = []
     seq = 1
+
     for calendar_day in range(1, HORIZON_HARI + 1):
-        for line in ["B", "G", "D"]:
+        # OPTIMIZATION: precompute active lines untuk hari ini (O(1) set lookup × 3)
+        active_lines = [l for l in ["B", "G", "D"] if calendar_day in _wd[l]]
+
+        for line in active_lines:
             line_state[line]["used_today"] = 0
+
+        # OPTIMIZATION: skip hari tidak aktif; break jika semua demand terjadwal
+        if not active_lines:
+            continue
+        if not unscheduled:
+            break
+
         count_batch_today = 0
-        while len(unscheduled) > 0:
+        while unscheduled:
             if batch_mode == "B35" and count_batch_today >= batch_limit_per_day:
                 break
             best_idx = best_line = best_finish = best_setup = best_tfill = best_speed = None
-            for idx, job in enumerate(unscheduled[:int(candidate_window)]):
+            for idx, job in enumerate(unscheduled[:candidate_window]):
                 candidates = []
-                for line in ["B", "G", "D"]:
-                    days, hours, availability, _downtime = get_line_calendar(scenario, line)
-                    if not is_line_working(calendar_day, days, holiday_day_set, downtime_sets[line]):
-                        continue
+                for line in active_lines:   # OPTIMIZATION: hanya cek lini yang aktif hari ini
+                    cap_mins = _lc[line]["cap_mins"]
                     speed = job["Speed D"] if line == "D" else job["Speed BG"]
                     if speed > 0 and job["SKU Gram"] > 0:
                         tfill = job["Batch Ton"] * 1_000_000 / job["SKU Gram"] / speed
                         setup = calc_setup(line_state[line], job)
                         finish = line_state[line]["used_today"] + setup + tfill
-                        if finish <= hours * 60 * availability:
+                        if finish <= cap_mins:
                             candidates.append((line, finish, setup, tfill, speed))
                 if candidates:
-                    chosen = sorted(candidates, key=lambda x: x[1])[0]
+                    chosen = min(candidates, key=lambda x: x[1])  # OPTIMIZATION: min() bukan sorted()[0]
                     best_idx, best_line, best_finish, best_setup, best_tfill, best_speed = idx, chosen[0], chosen[1], chosen[2], chosen[3], chosen[4]
                     break
             if best_idx is None:
@@ -416,10 +448,11 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
     finished_ton = tons_b + tons_g + tons_d
     unmet_demand = max(target_demand - finished_ton, 0)
     finished_ratio = finished_ton / target_demand * 100 if target_demand > 0 else 0
-    total_available = {}
-    for line in ["B", "G", "D"]:
-        days, hours, availability, _downtime = get_line_calendar(scenario, line)
-        total_available[line] = sum(hours * 60 * availability for day in range(1, HORIZON_HARI + 1) if is_line_working(day, days, holiday_day_set, downtime_sets[line]))
+    # OPTIMIZATION: gunakan precomputed working days untuk total_available
+    total_available = {
+        line: len(_wd[line]) * _lc[line]["cap_mins"]
+        for line in ["B", "G", "D"]
+    }
     util_b = (line_state["B"]["processing"] + line_state["B"]["setup"]) / total_available["B"] * 100 if total_available["B"] > 0 else 0
     util_g = (line_state["G"]["processing"] + line_state["G"]["setup"]) / total_available["G"] * 100 if total_available["G"] > 0 else 0
     util_d = (line_state["D"]["processing"] + line_state["D"]["setup"]) / total_available["D"] * 100 if total_available["D"] > 0 else 0
@@ -431,7 +464,6 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
         "Line G Days": scenario["Line G Days"], "Line G Hours": scenario["Line G Hours"],
         "Line D Days": scenario["Line D Days"], "Line D Hours": scenario["Line D Hours"],
         "Batch Mode": scenario["Batch Mode"], "Growth": scenario["Growth"],
-        "Line B Availability (%)": scenario.get("Line B Availability (%)", 100), "Line G Availability (%)": scenario.get("Line G Availability (%)", 100), "Line D Availability (%)": scenario.get("Line D Availability (%)", 100),
         "Line B Downtime Days/Month": scenario.get("Line B Downtime Days/Month", 0), "Line G Downtime Days/Month": scenario.get("Line G Downtime Days/Month", 0), "Line D Downtime Days/Month": scenario.get("Line D Downtime Days/Month", 0),
         "Target Demand Ton": round(target_demand, 2), "Planned Ton": round(finished_ton, 2), "Tons Finished": round(finished_ton, 2),
         "Planning Ratio (%)": round(finished_ratio, 2), "Finished Ratio (%)": round(finished_ratio, 2), "Unmet Demand Ton": round(unmet_demand, 2),
@@ -444,20 +476,67 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
     }, planned_jobs_df
 
 
-def run_des_simulation(forecast_input_df, b_days_options, b_hours_options, g_days_options, g_hours_options, d_days_options, d_hours_options, batch_options, growth_percent_options, holiday_cutoff_days=16, holiday_dates_text="", max_scenarios=DEFAULT_MAX_SCENARIOS, b_availability=100, g_availability=100, d_availability=100, b_downtime=0, g_downtime=0, d_downtime=0):
+def _run_single(args):
+    """Helper untuk parallel execution. Harus top-level agar picklable."""
+    forecast_df, scenario_dict, holiday_set = args
+    scenario = pd.Series(scenario_dict)
+    return simulate_one_scenario(forecast_df, scenario, holiday_set, DEFAULT_CANDIDATE_WINDOW)
+
+
+def run_des_simulation(forecast_input_df, b_days_options, b_hours_options, g_days_options, g_hours_options,
+                       d_days_options, d_hours_options, batch_options, growth_percent_options,
+                       holiday_cutoff_days=16, holiday_dates_text="", max_scenarios=DEFAULT_MAX_SCENARIOS,
+                       b_downtime=0, g_downtime=0, d_downtime=0,
+                       # Backward-compat: availability params diterima tapi diabaikan
+                       b_availability=100, g_availability=100, d_availability=100):
+    """
+    Jalankan DES simulation untuk semua skenario.
+    Menggunakan parallel execution (joblib) untuk percepatan signifikan.
+    """
     forecast_df = clean_prepared_input(forecast_input_df)
-    scenario_df = generate_scenarios(b_days_options, b_hours_options, g_days_options, g_hours_options, d_days_options, d_hours_options, batch_options, growth_percent_options, max_scenarios=max_scenarios, b_availability=b_availability, g_availability=g_availability, d_availability=d_availability, b_downtime=b_downtime, g_downtime=g_downtime, d_downtime=d_downtime)
+    scenario_df = generate_scenarios(
+        b_days_options, b_hours_options, g_days_options, g_hours_options,
+        d_days_options, d_hours_options, batch_options, growth_percent_options,
+        max_scenarios=max_scenarios, b_downtime=b_downtime, g_downtime=g_downtime, d_downtime=d_downtime,
+    )
     holiday_set = make_holiday_set(holiday_cutoff_days, holiday_dates_text)
+
+    scenario_list = [row.to_dict() for _, row in scenario_df.iterrows()]
+    args_list = [(forecast_df, sc, holiday_set) for sc in scenario_list]
+
+    # ── Parallel execution ────────────────────────────────────────────────────
+    # Gunakan joblib dengan backend loky (works on Windows + Linux).
+    # n_jobs=-1 = semua CPU core tersedia. Fallback ke sequential jika gagal.
+    try:
+        from joblib import Parallel, delayed
+
+        def _run(args):
+            _fdf, _sc, _hs = args
+            return simulate_one_scenario(_fdf, pd.Series(_sc), _hs, DEFAULT_CANDIDATE_WINDOW)
+
+        parallel_results = Parallel(n_jobs=-1, backend="loky", verbose=0)(
+            delayed(_run)(args) for args in args_list
+        )
+    except Exception:
+        # Fallback: sequential (aman untuk semua platform)
+        parallel_results = [
+            simulate_one_scenario(forecast_df, pd.Series(sc), holiday_set, DEFAULT_CANDIDATE_WINDOW)
+            for sc in scenario_list
+        ]
+
     results, all_planned = [], []
-    for _, scenario in scenario_df.iterrows():
-        result, planned = simulate_one_scenario(forecast_df, scenario, holiday_set, candidate_window=DEFAULT_CANDIDATE_WINDOW)
+    for result, planned in parallel_results:
         if result:
             results.append(result)
         if planned is not None and len(planned) > 0:
             all_planned.append(planned)
+
     result_df = pd.DataFrame(results)
     if not result_df.empty:
-        result_df = result_df.sort_values(by=["Tons Finished", "Unmet Demand Ton"], ascending=[False, True]).reset_index(drop=True)
+        result_df = result_df.sort_values(
+            by=["Tons Finished", "Unmet Demand Ton"], ascending=[False, True]
+        ).reset_index(drop=True)
+
     planned_jobs_df = pd.concat(all_planned, ignore_index=True) if all_planned else pd.DataFrame()
     meta = {"scenarios_evaluated": len(result_df), "holiday_days": len(holiday_set), "products_analyzed": len(forecast_df)}
     return result_df, scenario_df, planned_jobs_df, forecast_df, meta

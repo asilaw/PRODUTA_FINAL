@@ -81,7 +81,6 @@ def render():
         'Simulasi kapasitas lini produksi berbasis Discrete Event Simulation.</p>',
         unsafe_allow_html=True,
     )
-    note("Parameter availability dan downtime bersifat opsional. Nilai default: jadwal penuh tanpa gangguan.")
 
     st.markdown("<div class='section-title'>Input Data</div>", unsafe_allow_html=True)
     source = st.radio(
@@ -109,41 +108,36 @@ def render():
         st.caption(f"Input source: {source_note}")
         st.dataframe(forecast_input.head(120), use_container_width=True, hide_index=True)
 
-    st.markdown("<div class='section-title'>Line Availability Scenario</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Konfigurasi Lini</div>", unsafe_allow_html=True)
     bcol, gcol, dcol = st.columns(3)
     with bcol:
         st.markdown("**Line B**")
-        b_days = st.multiselect("Hari kerja/minggu B", [5, 6, 7], default=[6], key="b_days")
+        b_days  = st.multiselect("Hari kerja/minggu B", [5, 6, 7], default=[6], key="b_days")
         b_hours = st.multiselect("Jam kerja/hari B", [8, 16, 24], default=[16], key="b_hours")
-        b_avail = st.slider("Availability B (%)", 50, 100, 100, 5)
-        b_down = st.number_input("Downtime B (hari/bulan)", 0, 10, 0, 1)
+        b_down  = st.number_input("Downtime B (hari/bulan)", 0, 10, 0, 1)
     with gcol:
         st.markdown("**Line G**")
-        g_days = st.multiselect("Hari kerja/minggu G", [5, 6, 7], default=[6], key="g_days")
+        g_days  = st.multiselect("Hari kerja/minggu G", [5, 6, 7], default=[6], key="g_days")
         g_hours = st.multiselect("Jam kerja/hari G", [8, 16, 24], default=[16], key="g_hours")
-        g_avail = st.slider("Availability G (%)", 50, 100, 100, 5)
-        g_down = st.number_input("Downtime G (hari/bulan)", 0, 10, 0, 1)
+        g_down  = st.number_input("Downtime G (hari/bulan)", 0, 10, 0, 1)
     with dcol:
         st.markdown("**Line D**")
-        d_days = st.multiselect("Hari kerja/minggu D", [5, 6, 7], default=[7], key="d_days")
+        d_days  = st.multiselect("Hari kerja/minggu D", [5, 6, 7], default=[7], key="d_days")
         d_hours = st.multiselect("Jam kerja/hari D", [8, 16, 24], default=[24], key="d_hours")
-        d_avail = st.slider("Availability D (%)", 50, 100, 100, 5)
-        d_down = st.number_input("Downtime D (hari/bulan)", 0, 10, 0, 1)
+        d_down  = st.number_input("Downtime D (hari/bulan)", 0, 10, 0, 1)
+    b_avail = g_avail = d_avail = 100  # Availability tetap 100% (dihapus dari UI)
 
     st.markdown("<div class='section-title'>Business Scenario</div>", unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         batch_options = st.multiselect("Batch Mode", ["B35", "BLOSS"], default=["B35", "BLOSS"])
     with c2:
-        growth_mode = st.radio("Pertumbuhan Demand", ["Checklist", "Range"], horizontal=False)
+        gmin  = st.number_input("Growth min (%)", value=0.0, step=1.0, key="gmin")
+        gmax  = st.number_input("Growth max (%)", value=0.0, step=1.0, key="gmax")
+        gstep = st.number_input("Growth step (%)", min_value=1.0, value=5.0, step=1.0, key="gstep")
+        growth_options = make_growth_options("range", gmin=gmin, gmax=gmax, step=gstep)
     with c3:
-        if growth_mode == "Checklist":
-            growth_options = st.multiselect("Growth Demand (%)", [0, 5, 10], default=[0])
-        else:
-            gmin = st.number_input("Growth min (%)", value=0.0, step=1.0)
-            gmax = st.number_input("Growth max (%)", value=10.0, step=1.0)
-            gstep = st.number_input("Growth step (%)", min_value=0.5, value=5.0, step=0.5)
-            growth_options = make_growth_options("range", gmin=gmin, gmax=gmax, step=gstep)
+        st.caption(f"Growth: {', '.join(str(int(g))+'%' for g in growth_options)}" if growth_options else "—")
     with c4:
         max_scenarios = st.number_input("Max skenario", min_value=1, max_value=500, value=100, step=10)
 
@@ -180,7 +174,6 @@ def render():
                     holiday_cutoff_days=holiday_cutoff,
                     holiday_dates_text=holiday_dates,
                     max_scenarios=int(max_scenarios),
-                    b_availability=b_avail, g_availability=g_avail, d_availability=d_avail,
                     b_downtime=b_down, g_downtime=g_down, d_downtime=d_down,
                 )
                 excel_bytes, excel_name = export_to_excel_bytes(result_df, scenario_df, planned_jobs_df, input_df, "Simulasi DES Capacity")

@@ -76,10 +76,10 @@ def diagnose_bottleneck(row):
     primary = max(utils, key=utils.get)
     mu      = utils[primary]
     uvals   = list(utils.values())
-    if mu > 85:               sev = "KRITIS"
-    elif mu > 70:             sev = "TINGGI"
-    elif mu > 60 or ur > 10: sev = "SEDANG"
-    else:                     sev = "RENDAH"
+    # Severity berbasis FIS score (gradasi, bukan threshold biner)
+    from modules.fis_engine import compute_fis as _cfis, fis_severity_label as _fsl
+    _score = _cfis(mu, ur, 100 - ur if ur > 0 else 100)
+    sev    = _fsl(_score)
     return {"primary_bottleneck": primary, "max_util": round(mu,1),
             "severity": sev, "unmet_ratio": round(ur,1),
             "load_imbalance": round(max(uvals)-min(uvals),1),
