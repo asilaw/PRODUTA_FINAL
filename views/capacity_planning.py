@@ -311,10 +311,13 @@ def render():
         _tons_fin=_s(row,"Tons_Finished")
         _sys_hrs=(_b_d/7*349*_b_h)+(_g_d/7*349*_g_h)+(_d_d/7*349*_d_h)
         # Format scenario label: "B:7D/24H G:7D/24H D:7D/24H | BLOSS"
-        _label=(f"B:{int(_b_d)}D/{int(_b_h)}H · G:{int(_g_d)}D/{int(_g_h)}H · D:{int(_d_d)}D/{int(_d_h)}H"
-                +(f" | {_bmode}" if _bmode else "")
-                +(f" | G+{_growth}%" if _growth not in ("0","0%","") else ""))
-               def _safe_float(value, default=0):
+        _label=(
+            f"B:{int(_b_d)}D/{int(_b_h)}H · G:{int(_g_d)}D/{int(_g_h)}H · D:{int(_d_d)}D/{int(_d_h)}H"
+            +(f" | {_bmode}" if _bmode else "")
+            +(f" | G+{_growth}%" if _growth not in ("0","0%","") else "")
+        )
+        
+        def _safe_float(value, default=0):
             try:
                 if value is None:
                     return float(default)
